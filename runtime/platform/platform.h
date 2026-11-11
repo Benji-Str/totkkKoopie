@@ -460,6 +460,21 @@ int plat_ipc_read(PlatIpc *p, void *buf, size_t n, uint32_t ms);
 int plat_ipc_write(PlatIpc *p, const void *buf, size_t n);   // 1 when all n bytes were written, 0 the connection broke
 void plat_ipc_close(PlatIpc *p);
 
+// ---- UDP: datagrams to and from IPv4 peers (the co-op link, coop.cpp). Addresses and ports are in host byte order:
+// 127.0.0.1 is 0x7f000001. Numeric addresses only; nothing here looks a name up.
+typedef struct PlatUdp PlatUdp;
+typedef struct { uint32_t ip; uint16_t port; } PlatUdpAddr;
+// A socket bound to ip:port (ip 0: every local address; port 0: one the OS picks). NULL on failure; *err (may be NULL)
+// gets the OS error code (WSAGetLastError, errno).
+PlatUdp *plat_udp_open(uint32_t ip, uint16_t port, uint32_t *err);
+uint16_t plat_udp_port(PlatUdp *u);   // the port the socket is bound to, 0 when unknown
+// One datagram of n bytes to *to: 1 when the OS took it, 0 when not (no route, buffer full; UDP may drop it later anyway).
+int plat_udp_send(PlatUdp *u, const PlatUdpAddr *to, const void *data, size_t n);
+// Waits at most ms for one datagram: its length (one longer than cap is cut to cap), 0 none in time, -1 the socket
+// failed. *from (may be NULL) gets the sender. An ICMP "port unreachable" for an earlier send counts as none.
+int plat_udp_recv(PlatUdp *u, void *buf, size_t cap, PlatUdpAddr *from, uint32_t ms);
+void plat_udp_close(PlatUdp *u);   // NULL is fine
+
 // ---- restart: this program again, in a new process that starts once this one is gone
 // Starts this executable again with the same command line, environment and working folder, and no handle of this
 // process. 1 when it started; the caller then exits.

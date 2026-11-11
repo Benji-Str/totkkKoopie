@@ -9,6 +9,7 @@
 #include <linux/fs.h>
 #include <linux/futex.h>
 #include <linux/userfaultfd.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sched.h>
@@ -1798,6 +1799,61 @@ void plat_ipc_close(PlatIpc *p) {
     if (!p) return;
     close(p->fd);
     free(p);
+}
+
+// ---- UDP (platform.h): BSD sockets
+struct PlatUdp { int fd; };
+
+PlatUdp *plat_udp_open(uint32_t ip, uint16_t port, uint32_t *err) {
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        if (err) *err = (uint32_t)errno;
+        return NULL;
+    }
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(ip)};
+    PlatUdp *u = bind(fd, (const struct sockaddr *)&a, sizeof a) ? NULL : malloc(sizeof *u);
+    if (!u) {
+        if (err) *err = (uint32_t)errno;
+        close(fd);
+        return NULL;
+    }
+    u->fd = fd;
+    return u;
+}
+
+uint16_t plat_udp_port(PlatUdp *u) {
+    struct sockaddr_in a;
+    socklen_t n = sizeof a;
+    if (getsockname(u->fd, (struct sockaddr *)&a, &n) || a.sin_family != AF_INET) return 0;
+    return ntohs(a.sin_port);
+}
+
+int plat_udp_send(PlatUdp *u, const PlatUdpAddr *to, const void *data, size_t n) {
+    if (n > 65507) return 0;
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(to->port), .sin_addr.s_addr = htonl(to->ip)};
+    ssize_t put;
+    do put = sendto(u->fd, data, n, MSG_NOSIGNAL, (const struct sockaddr *)&a, sizeof a);
+    while (put < 0 && errno == EINTR);
+    return put == (ssize_t)n;
+}
+
+int plat_udp_recv(PlatUdp *u, void *buf, size_t cap, PlatUdpAddr *from, uint32_t ms) {
+    struct pollfd p = {.fd = u->fd, .events = POLLIN};
+    int ready = poll(&p, 1, ms > INT_MAX ? INT_MAX : (int)ms);
+    if (ready < 0) return errno == EINTR ? 0 : -1;
+    if (!ready) return 0;
+    struct sockaddr_in a;
+    socklen_t alen = sizeof a;
+    ssize_t got = recvfrom(u->fd, buf, cap > 65535 ? 65535 : cap, MSG_DONTWAIT, (struct sockaddr *)&a, &alen);
+    if (got < 0) return errno == EINTR || errno == EAGAIN || errno == ECONNREFUSED ? 0 : -1;   // ECONNREFUSED: ICMP
+    if (from) from->ip = ntohl(a.sin_addr.s_addr), from->port = ntohs(a.sin_port);
+    return (int)got;
+}
+
+void plat_udp_close(PlatUdp *u) {
+    if (!u) return;
+    close(u->fd);
+    free(u);
 }
 
 

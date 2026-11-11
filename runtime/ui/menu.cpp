@@ -38,6 +38,7 @@ extern "C" {
 #include "amiibo.h"
 #include "cheats.h"
 #include "cfg.h"
+#include "coop.h"
 #include "fs.h"
 #include "input.h"
 #include "input_map.h"
@@ -53,6 +54,7 @@ void vk_queue_lock(void);
 void vk_queue_unlock(void);
 int vk_exec_replay_workers(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
+int gfx_picture_rect(float out[4]);   // gfx_present.c: where the last present put the picture
 double frame_step_limit_hz(void);
 extern const int rt_game_version;
 extern const char rt_port_version[];
@@ -1533,6 +1535,64 @@ static void perf_draw(const MenuTarget *t, float scale) {
     dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), g_perf_text);
 }
 
+// ---- co-op markers (coop.h): the peer's position over the picture, and with coop_marker = 2 the test marks
+// A marker on the picture is a filled disc; one off it or behind the camera a ring on the picture's border, towards it.
+static void coop_mark(ImDrawList *dl, const float xy[2], int where, ImU32 col, const char *label, float scale) {
+    float r = 8 * scale;
+    ImVec2 c(xy[0], xy[1]);
+    if (where == 2) {   // keep the whole ring inside the window
+        ImVec2 d = ImGui::GetIO().DisplaySize;
+        c.x = c.x < r + 2 ? r + 2 : c.x > d.x - r - 2 ? d.x - r - 2 : c.x;
+        c.y = c.y < r + 2 ? r + 2 : c.y > d.y - r - 2 ? d.y - r - 2 : c.y;
+        dl->AddCircle(c, r, col, 0, 3 * scale);
+    } else {
+        dl->AddCircleFilled(c, r, col);
+        dl->AddCircle(c, r, IM_COL32(0, 0, 0, 200), 0, 1.5f * scale);
+    }
+    if (!label || !*label) return;
+    ImVec2 sz = ImGui::CalcTextSize(label);
+    ImVec2 p(c.x - sz.x / 2, c.y - r - 4 * scale - sz.y);
+    if (p.y < 2) p.y = c.y + r + 4 * scale;   // no room above: below it
+    dl->AddText(ImVec2(p.x + 1, p.y + 1), IM_COL32(0, 0, 0, 220), label);
+    dl->AddText(p, col, label);
+}
+
+static void coop_draw(const MenuTarget *t, float scale, bool open) {
+    float pic[4], rect[4];
+    if (!gfx_picture_rect(pic)) pic[0] = pic[1] = 0, pic[2] = pic[3] = 1;
+    rect[0] = pic[0] * t->width, rect[1] = pic[1] * t->height, rect[2] = pic[2] * t->width, rect[3] = pic[3] * t->height;
+    CoopView v;
+    coop_view(rect, &v);
+    if (!v.marker) return;
+    ImDrawList *dl = open ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+    char label[64];
+    if (v.marker == 2 && v.check_on) {   // the camera test point: a cross that the loop-back marker should cover
+        float s = 10 * scale, x = v.check_xy[0], y = v.check_xy[1];
+        ImU32 yellow = IM_COL32(255, 220, 40, 235);
+        dl->AddLine(ImVec2(x - s, y), ImVec2(x + s, y), yellow, 2 * scale);
+        dl->AddLine(ImVec2(x, y - s), ImVec2(x, y + s), yellow, 2 * scale);
+    }
+    if (v.marker == 2 && v.local_on) coop_mark(dl, v.local_xy, v.local_on, IM_COL32(80, 220, 120, 235), "P1", scale);
+    if (v.remote_on) {
+        snprintf(label, sizeof label, "%s %.0f m", v.remote_test ? "P2 (test)" : "P2", v.remote_dist);
+        coop_mark(dl, v.remote_xy, v.remote_on, IM_COL32(255, 140, 40, 235), label, scale);
+    }
+    if (v.marker != 2) return;
+    // test mode: the link and the camera export in the top left corner
+    static const char *const links[] = {"off", "waiting for the peer", "peer heard"};
+    char text[256];
+    snprintf(text, sizeof text,
+             "co-op test\nlink: %s\npackets: %llu sent, %llu received, %llu refused\ncamera: %s\ntest point ndc: %.3f %.3f",
+             links[v.link < 0 || v.link > 2 ? 0 : v.link], (unsigned long long)v.tx, (unsigned long long)v.rx,
+             (unsigned long long)v.dropped, v.cam_ok ? "exported" : "none (loading, or no scene draw)",
+             v.check_ndc[0], v.check_ndc[1]);
+    ImVec2 sz = ImGui::CalcTextSize(text);
+    float pad = 6 * scale;
+    ImVec2 p(12 * scale, 12 * scale);
+    dl->AddRectFilled(p, ImVec2(p.x + sz.x + pad * 2, p.y + sz.y + pad * 2), IM_COL32(0, 0, 0, 150), 4 * scale);
+    dl->AddText(ImVec2(p.x + pad, p.y + pad), IM_COL32(255, 255, 255, 235), text);
+}
+
 extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const char **shot) {
     *shot = NULL;
     cheats_frame(frame);   // the data cheats and the buttons of the cheats that need them held
@@ -1542,6 +1602,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     perf_tick(plat_now_ns(), t);
     amiibo_tick();
     bool open = g_open.load(std::memory_order_relaxed);
+    bool coop = coop_overlay_on();   // co-op markers: the overlay runs with the menu closed as well
     if (!open) {
         if (g_save_pending) g_save_pending = opt_save_tick(1);   // closed: the last change goes to totk.ini now
         if (g_test.at && !g_test.opened && frame >= g_test.at) {
@@ -1550,7 +1611,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
             g_tab_request = 0;
             set_open(1);
             open = true;
-        } else if (!g_perf_mode) {
+        } else if (!g_perf_mode && !coop) {
             return 0;
         }
     }
@@ -1602,6 +1663,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     ImGui::NewFrame();
     if (open) layout_menu(t->width, t->height, scale);
     perf_draw(t, scale);
+    if (coop) coop_draw(t, scale, open);
     ImGui::Render();
     if (open) g_save_pending = opt_save_tick(0);
     g_cost_ns += plat_now_ns() - t0;

@@ -2,6 +2,7 @@
 // SRW locks and condition variables.
 #include <io.h>
 #include <stdio.h>
+#include <winsock2.h>   // before windows.h, which would pull the older winsock.h in
 #include <windows.h>
 #include <bcrypt.h>
 #include <pdh.h>
@@ -1914,6 +1915,80 @@ void plat_ipc_close(PlatIpc *p) {
     if (!p) return;
     CloseHandle(p->h);
     free(p);
+}
+
+// ---- UDP (platform.h): Winsock 2, started once on the first open and left running until the process exits
+struct PlatUdp { SOCKET s; };
+
+static PlatOnce wsa_once;
+static int wsa_err;
+
+static void wsa_start(void *arg) {
+    (void)arg;
+    WSADATA d;
+    wsa_err = WSAStartup(MAKEWORD(2, 2), &d);
+}
+
+PlatUdp *plat_udp_open(uint32_t ip, uint16_t port, uint32_t *err) {
+    plat_once(&wsa_once, wsa_start, NULL);
+    if (wsa_err) {
+        if (err) *err = (uint32_t)wsa_err;
+        return NULL;
+    }
+    SOCKET s = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    if (s == INVALID_SOCKET) {
+        if (err) *err = (uint32_t)WSAGetLastError();
+        return NULL;
+    }
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(ip)};
+    PlatUdp *u = bind(s, (const struct sockaddr *)&a, sizeof a) ? NULL : malloc(sizeof *u);
+    if (!u) {
+        if (err) *err = (uint32_t)WSAGetLastError();
+        closesocket(s);
+        return NULL;
+    }
+    u->s = s;
+    return u;
+}
+
+uint16_t plat_udp_port(PlatUdp *u) {
+    struct sockaddr_in a;
+    int n = sizeof a;
+    if (getsockname(u->s, (struct sockaddr *)&a, &n) || a.sin_family != AF_INET) return 0;
+    return ntohs(a.sin_port);
+}
+
+int plat_udp_send(PlatUdp *u, const PlatUdpAddr *to, const void *data, size_t n) {
+    if (n > 65507) return 0;
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(to->port), .sin_addr.s_addr = htonl(to->ip)};
+    return sendto(u->s, data, (int)n, 0, (const struct sockaddr *)&a, sizeof a) == (int)n;
+}
+
+int plat_udp_recv(PlatUdp *u, void *buf, size_t cap, PlatUdpAddr *from, uint32_t ms) {
+    fd_set r;
+    FD_ZERO(&r);
+    FD_SET(u->s, &r);
+    struct timeval tv = {(long)(ms / 1000), (long)(ms % 1000) * 1000};
+    int ready = select(0, &r, NULL, NULL, &tv);
+    if (ready == SOCKET_ERROR) return -1;
+    if (!ready) return 0;
+    struct sockaddr_in a;
+    int alen = sizeof a;
+    int got = recvfrom(u->s, buf, cap > 65535 ? 65535 : (int)cap, 0, (struct sockaddr *)&a, &alen);
+    if (got == SOCKET_ERROR) {
+        int e = WSAGetLastError();
+        if (e == WSAEMSGSIZE) got = cap > 65535 ? 65535 : (int)cap;   // Windows cuts the datagram and says so
+        else if (e == WSAECONNRESET) return 0;   // the ICMP answer to an earlier send to a closed port
+        else return -1;
+    }
+    if (from) from->ip = ntohl(a.sin_addr.s_addr), from->port = ntohs(a.sin_port);
+    return got;
+}
+
+void plat_udp_close(PlatUdp *u) {
+    if (!u) return;
+    closesocket(u->s);
+    free(u);
 }
 
 

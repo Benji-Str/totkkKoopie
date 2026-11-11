@@ -57,6 +57,10 @@ MacNativeGames cannot run on x86-64 as is: its CPU path executes ARM64 code nati
   drawn into the swapchain image (`runtime/ui/`); their text is in `ui_text.c` (English, Russian, Brazilian Portuguese,
   Simplified Chinese). The Chinese glyphs come from a system font (Microsoft YaHei, `plat_font_path`) merged into the
   font atlas.
+- Local co-op (experimental, `coop = 1`, `coop.cpp`): a link thread sends this side's pose over UDP (`plat_udp_*` in
+  `runtime/platform/`) and keeps the peer's in seqlocks; the replay exports the scene camera (`vk_dlaa.c`
+  `export_frame`, DLAA or not) and the overlay (`ui/menu.cpp`) draws the peer's position through it. Received data
+  is never written into guest memory. The player hook that publishes this side's pose is still to come.
 - OS calls the host makes go through `runtime/platform/` (`platform.h`, `win32.c`), so a Linux or macOS host adds one file instead of touching the rest. The split is not finished: `tools/check_platform.py` lists the Win32 uses left in the other files.
 
 #### Threads and cores

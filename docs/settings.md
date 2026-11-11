@@ -201,6 +201,17 @@ Many rows below are developer tools that only act together with another setting 
 | `tex_released_mib` (default `256`) | MiB of textures the game released that are kept for reuse; older ones beyond it are dropped. `0` keeps up to 2048 of them, whatever their size. | A larger value keeps more device memory and process commit; a smaller one makes the game create more textures again. | Caution |
 | `vma_block_mib` (default `64`) | Block size in MiB that the Vulkan memory allocator takes from the driver for buffers and other images on heaps over 1 GiB; larger allocations than half a block get memory of their own. `0` uses the allocator's 256. | Larger blocks hold more memory that nothing uses; smaller ones mean more allocations from the driver. | Caution |
 
+## Local co-op (experimental)
+
+A host-side link between two copies of the game on one network (`runtime/coop.cpp`, overview in `runtime/coop.h`): each side sends its pose over UDP 30 times a second and draws the other's position as a marker over the picture, projected through the scene camera the replay exports. Nothing received is written into the game's memory. There is no player hook yet; until there is, only the camera test of `coop_marker = 2` has a pose to send. `totk.exe --probe-coop` checks the link without game files.
+
+| Setting | What it does | Effect of changing it | Safety |
+| --- | --- | --- | --- |
+| `coop` (default `0`) | `1` starts the link thread at game start: it opens `coop_port` and sends to `coop_peer`. Read once at start. | Opens a UDP port on every network interface (Windows may ask to allow it); with `coop_peer` missing or malformed the log says so and co-op stays off. | Caution |
+| `coop_port` (default `27460`) | UDP port the link listens on, 1024 to 65535; also the peer's port when `coop_peer` names none. | Both sides need the port free and reachable; the log says when it cannot be opened. | Safe |
+| `coop_peer` | The other copy's address as `a.b.c.d` or `a.b.c.d:port` (numbers only, no names), or `loop` to send to this copy itself. Packets from any other address and port are refused. | A wrong address shows `waiting for the peer` in the test overlay; `loop` makes this copy's own pose come back as the peer's. | Safe |
+| `coop_marker` (default `1`) | `1` draws the peer's marker (orange disc on the picture, orange ring on its border when the peer is off screen or behind the camera); `0` draws nothing and stops the camera export; `2` is the test mode: a yellow cross 10 m in front of the camera, which must sit in the middle of the picture, this copy's player as a green P1 once a player hook publishes one, a status box with the link and the camera, and a log line every 600 frames with the cross's position (`coop: test`). While no player hook runs, the cross's point is sent as this copy's pose, so with `coop_peer = loop` the returned marker covers the cross. | Changes take effect at once. With `1` or `2` the overlay also runs while the menu is closed, which costs a little CPU on the present path. | Safe |
+
 ## Generated-code patches
 
 These names are code patch sets built into the generated game code (`recomp/patches-*.txt`). `rt_patches_init` reads the environment name at start, then the resolution and mouse code switches some sets itself.

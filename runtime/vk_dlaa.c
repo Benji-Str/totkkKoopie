@@ -18,6 +18,7 @@
 #include <wchar.h>
 
 #include "cfg.h"
+#include "coop.h"
 #include "host.h"
 #include "platform/platform.h"
 #include "vk.h"
@@ -857,7 +858,77 @@ static void note_camera(const VkExec *ex) {
         D.cam_addr = b->addr;
 }
 
+// ---- the scene camera for the co-op overlay (coop.cpp)
+// note_camera knows the scene's depth target only once DLAA ran on it (D.jdepth); the overlay needs the camera with
+// DLAA off too. So while coop_camera_wanted(), every draw that may be a scene draw (c4 of the camera block's size, a
+// D32F depth target at least DLAA_SCENE_MIN_W wide) is a candidate: per frame up to CX_N different blocks, each copied
+// out of the uniform snapshot when first seen (the snapshot holds a submission's copy only while its replay runs) and
+// its draws counted. At the present (vk_dlaa_frame) the most likely scene camera goes to coop.cpp: the one drawn with
+// DLAA's own depth target first, then one whose target has the game's scene size (res_sizes), then the most draws.
+// Shadow cascades and other views bind camera blocks of their own on other targets.
+#define CX_N 6
+#define CX_ROWS 28   // vec4 rows 0-6: view and view-projection
+static struct {
+    PlatMutex lock;   // the chunks of a chunked replay record side by side
+    int n;
+    uint64_t frames, picked[3];   // frames exported, and by which rule (DLAA's target, scene size, most draws)
+    struct {
+        uint64_t addr;
+        VkImage depth;
+        uint32_t w, h, draws;
+        float rows[CX_ROWS];
+    } c[CX_N];
+} CX = {PLAT_MUTEX_INIT};
+
+static void export_note(const VkExec *ex) {
+    if (!coop_camera_wanted()) return;
+    const p_bind_buf *b = &ex->ubo[0][1];
+    const VkExecTarget *z = &ex->depth;
+    if (b->size != CAM_BLOCK || !b->addr || !z->image || z->format != VK_FORMAT_D32_SFLOAT || z->width < DLAA_SCENE_MIN_W)
+        return;
+    plat_mutex_lock(&CX.lock);
+    int i = 0;
+    while (i < CX.n && (CX.c[i].addr != b->addr || CX.c[i].depth != z->image)) i++;
+    if (i < CX.n) {
+        CX.c[i].draws++;
+    } else if (CX.n < CX_N) {
+        const float *rows = (const float *)vk_usnap_bytes(b->addr, CX_ROWS * 4);
+        if (rows) {
+            CX.c[i].addr = b->addr, CX.c[i].depth = z->image, CX.c[i].w = z->width, CX.c[i].h = z->height;
+            CX.c[i].draws = 1;
+            memcpy(CX.c[i].rows, rows, sizeof CX.c[i].rows);
+            CX.n++;
+        }
+    }
+    plat_mutex_unlock(&CX.lock);
+}
+
+static void export_frame(void) {
+    if (!__atomic_load_n(&CX.n, __ATOMIC_RELAXED)) return;   // nothing noted (the overlay is off): no lock taken
+    unsigned out[2], scene[2];
+    res_sizes(out, scene);
+    plat_mutex_lock(&CX.lock);
+    int best = -1, rule = 0;
+    for (int i = 0; i < CX.n; i++) {
+        int r = D.jdepth && CX.c[i].depth == D.jdepth ? 0 : CX.c[i].w == scene[0] && CX.c[i].h == scene[1] ? 1 : 2;
+        if (best < 0 || r < rule || (r == rule && CX.c[i].draws > CX.c[best].draws)) best = i, rule = r;
+    }
+    if (best >= 0) {
+        coop_camera_note(CX.c[best].rows, CX.c[best].w, CX.c[best].h,
+                         __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED));
+        CX.picked[rule]++;
+        if (++CX.frames == 1 || CX.frames % 3600 == 0)
+            rt_log("coop: scene camera exported for %llu frames (by DLAA's target %llu, by scene size %llu, by most "
+                   "draws %llu); this frame %d candidates, picked %ux%u with %u draws",
+                   (unsigned long long)CX.frames, (unsigned long long)CX.picked[0], (unsigned long long)CX.picked[1],
+                   (unsigned long long)CX.picked[2], CX.n, CX.c[best].w, CX.c[best].h, CX.c[best].draws);
+    }
+    CX.n = 0;
+    plat_mutex_unlock(&CX.lock);
+}
+
 void vk_dlaa_draw(VkExec *ex) {
+    export_note(ex);   // the co-op overlay's camera, DLAA or not
     if (!dl_active() || ended_at(ex)) return;
     static int survey = -1;   // TOTK_DLAA_SURVEY=1 (test): what is drawn into the armed light target
     if (survey < 0) survey = rt_knob("DLAA_SURVEY", "0");
@@ -1221,6 +1292,7 @@ static void preset_check(void) {
 }
 
 void vk_dlaa_frame(void) {
+    export_frame();   // before the DLAA state below may return
     vk_dlaa_swap_img = NULL, vk_dlaa_swap_view = VK_NULL_HANDLE;
     dlss_mode();
     preset_check();
