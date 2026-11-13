@@ -10,6 +10,18 @@ Update, `prod.keys` und einen Ordner wählen, **Installieren**. Sie packt die Te
 `%LOCALAPPDATA%\TotK-Koop\Testbank` aus und erledigt alle Reiter der Reihe nach: Werkzeuge, Quellcode mit Koop-Patch,
 Bauen, Einstellungen, Firewall, Verknüpfung „TotK Koop“ auf dem Desktop. Spieldateien und Schlüssel sind nicht darin.
 
+## Automatische Updates
+
+Die Verknüpfung „TotK Koop“ schaut bei jedem Start nach, ob es einen neuen Koop-Stand gibt (Zweig `koop` im
+GitHub-Repo aus `koop-update.json`). Wenn ja, erscheint kurz das Fenster „Update wird installiert“: Es holt den neuen
+Stand, baut nur das Geänderte neu (meist 1 bis 5 Minuten) und startet dann das Spiel. Ohne Internet startet einfach
+die vorhandene Version. Schlägt ein Update fehl, startet die bisherige Version, und beim nächsten Start wird es erneut
+versucht.
+
+Veröffentlichen (nur am Entwickler-PC): `python publish_update.py "Was sich geändert hat"`. Das Skript kopiert den
+Stand aus `totk-pc-recomp` nach `koop-publish`, prüft ihn mit `tools/check_content.py` auf Spieldaten, committet und
+lädt ihn hoch. Einmalig vorher: `python publish_update.py --setup https://github.com/NAME/REPO`.
+
 ## Start
 
 1. Den Ordner aus der ZIP-Datei irgendwohin entpacken, zum Beispiel `C:\TotK-Testbank`.
