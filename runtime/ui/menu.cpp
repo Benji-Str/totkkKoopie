@@ -665,8 +665,8 @@ static void tab_screen(float scale) {
     static const UiTextId present[] = {UI_MENU_PRESENT_MAILBOX, UI_MENU_PRESENT_VSYNC, UI_MENU_PRESENT_IMMEDIATE};
     opt_choice("TOTK_VK_PRESENT", UI_MENU_PRESENT, present, 3, UI_MENU_PRESENT_DESC, present_note());
     row_gpu();
-    static const UiTextId perf[] = {UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL};
-    opt_choice("TOTK_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
+    static const UiTextId perf[] = {UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL, UI_MENU_PERF_BAR};
+    opt_choice("TOTK_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 4, UI_MENU_PERF_OVERLAY_DESC);
     opt_group(UI_MENU_GRAPHICS);
     row_output_res();
     row_render_scale();
@@ -1461,19 +1461,22 @@ static void layout_start(uint32_t w, uint32_t h, float scale) {
 // ---- the performance overlay (TOTK_PERF_OVERLAY), in the top right corner. "fps": the frame rate over the presents of
 // the last half second. "full": a panel of perfmon.c's numbers, in the style of SavageWindRecomp's perf_overlay_draw
 // (menu.mm): the machine's load and temperatures, the frame rate and frame times with a graph, the render thread's waits.
+// "bar": full's main numbers in one strip across the top of the window (perf_bar_draw).
 // Off, it costs a cfg_version load per present.
 static unsigned g_perf_ver = ~0u;
-static int g_perf_mode;                  // 0 off, 1 fps, 2 full
+static int g_perf_mode;                  // 0 off, 1 fps, 2 full, 3 bar (full's numbers in a strip along the top)
 static std::atomic<int> g_perf_save;     // F10 changed the mode: totk.ini is written on the present thread
 static uint64_t g_perf_last_ns, g_perf_win_ns, g_perf_max_ns;
 static int g_perf_frames;
 static char g_perf_text[96];
 
-static int perf_mode_of(const char *s) { return !strcmp(s, "full") ? 2 : !strcmp(s, "fps") ? 1 : 0; }
+static int perf_mode_of(const char *s) {
+    return !strcmp(s, "bar") ? 3 : !strcmp(s, "full") ? 2 : !strcmp(s, "fps") ? 1 : 0;
+}
 
 extern "C" void menu_perf_cycle(void) {
-    static const char *const modes[] = {"off", "fps", "full"};
-    cfg_set("TOTK_PERF_OVERLAY", modes[(perf_mode_of(cfg_value("TOTK_PERF_OVERLAY")) + 1) % 3]);
+    static const char *const modes[] = {"off", "fps", "full", "bar"};
+    cfg_set("TOTK_PERF_OVERLAY", modes[(perf_mode_of(cfg_value("TOTK_PERF_OVERLAY")) + 1) % 4]);
     g_perf_save.store(1);
 }
 
@@ -1509,8 +1512,8 @@ static void perf_tick(uint64_t now, const MenuTarget *t) {
         int m = perf_mode_of(cfg_value("TOTK_PERF_OVERLAY"));
         if (m != g_perf_mode) {
             g_perf_last_ns = 0, g_perf_text[0] = 0;
-            if (m == 2) perf_gpu_once(t);
-            perfmon_mode(m);
+            if (m >= 2) perf_gpu_once(t);
+            perfmon_mode(m == 3 ? 2 : m);   // the bar shows full's numbers: the same sampling
         }
         g_perf_mode = m;
     }
@@ -1710,8 +1713,61 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
     ImGui::End();
 }
 
+// The bar: full's main numbers in one strip across the top of the window, left to right: the frame rate with its 1%
+// low, the frame time with its longest, then GPU, VRAM, CPU and RAM. A label in its colour, then its numbers; "-" for
+// a number the machine does not give. Under the menu while it is open, like the fps line.
+static void perf_bar_draw(const MenuTarget *t, float scale) {
+    PerfStats s;
+    perfmon_snapshot(&s);
+    ImDrawList *dl = g_open.load(std::memory_order_relaxed) ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+    ImFont *font = ImGui::GetFont();
+    float fs = ImGui::GetFontSize() * 0.8f, pad = 6 * scale, gap = 18 * scale;
+    float h = fs + pad * 2;
+    dl->AddRectFilled(ImVec2(0, 0), ImVec2((float)t->width, h), IM_COL32(0, 0, 0, 160));
+    const ImU32 label_c[] = {IM_COL32(242, 242, 242, 255), IM_COL32(242, 242, 242, 255), IM_COL32(140, 212, 79, 255),
+                             IM_COL32(140, 212, 79, 255), IM_COL32(46, 150, 204, 255), IM_COL32(204, 115, 178, 255)};
+    const ImU32 num_c = IM_COL32(255, 255, 255, 235), dim_c = IM_COL32(170, 170, 170, 220);
+    float x = pad * 2, y = pad;
+    auto text = [&](const char *str, ImU32 c) {
+        dl->AddText(font, fs, ImVec2(x, y), c, str);
+        x += font->CalcTextSizeA(fs, FLT_MAX, 0, str).x;
+    };
+    auto num = [&](UiTextId fmt, float v, bool dim = false) {
+        char b[64];
+        if (v < 0) snprintf(b, sizeof b, "%s", menu_text(UI_MENU_OV_NONE));
+        else snprintf(b, sizeof b, menu_text(fmt), v);
+        x += 5 * scale;
+        text(b, dim ? dim_c : num_c);
+    };
+    text(menu_text(UI_MENU_OV_FPS_LABEL), label_c[0]);
+    num(UI_MENU_OV_FMT_FPS, s.fps);
+    num(UI_MENU_OV_LOW1, s.low1_fps, true);
+    x += gap;
+    text(menu_text(UI_MENU_OV_FRAME_LABEL), label_c[1]);
+    num(UI_MENU_OV_FMT_MS, s.frame_ms_avg);
+    num(UI_MENU_OV_MAX_MS, s.frame_ms_max, true);
+    x += gap;
+    text(menu_text(UI_MENU_OV_GPU), label_c[2]);
+    num(UI_MENU_OV_FMT_PCT, s.gpu_pct);
+    num(UI_MENU_OV_FMT_TEMP, s.gpu_temp_c, true);
+    num(UI_MENU_OV_FMT_POWER, s.gpu_power_w, true);
+    x += gap;
+    text(menu_text(UI_MENU_OV_VRAM), label_c[3]);
+    num(UI_MENU_OV_FMT_GB, perf_gb(s.vram_used_mb));
+    num(UI_MENU_OV_FMT_GB_OF, perf_gb(s.vram_total_mb), true);
+    x += gap;
+    text(menu_text(UI_MENU_OV_CPU), label_c[4]);
+    num(UI_MENU_OV_FMT_PCT, s.cpu_total_pct);
+    num(UI_MENU_OV_FMT_TEMP, s.cpu_temp_c, true);
+    x += gap;
+    text(menu_text(UI_MENU_OV_RAM), label_c[5]);
+    num(UI_MENU_OV_FMT_GB, perf_gb(s.ram_used_mb));
+    num(UI_MENU_OV_FMT_GB_OF, perf_gb(s.ram_total_mb), true);
+}
+
 static void perf_draw(const MenuTarget *t, float scale) {
     if (g_perf_mode == 2) return perf_full_draw(t, scale);
+    if (g_perf_mode == 3) return perf_bar_draw(t, scale);
     float w = (float)t->width;
     if (!g_perf_mode || !g_perf_text[0]) return;
     // with the menu open: under its window, over the dimming layout_menu drew before

@@ -57,8 +57,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_GPU_AUTO] = "Automatic",
     [UI_MENU_PERF_OVERLAY] = "Performance overlay",
     [UI_MENU_PERF_OVERLAY_DESC] = "Frame rate in the top right corner. Full adds frame times with a graph, CPU, GPU and "
-                                  "memory load, temperatures and the render thread's waits. F10 cycles the modes.",
-    [UI_MENU_PERF_OFF] = "Off", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Full",
+                                  "memory load, temperatures and the render thread's waits. Bar shows the main numbers "
+                                  "in a strip across the top of the picture. F10 cycles the modes.",
+    [UI_MENU_PERF_OFF] = "Off", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Full", [UI_MENU_PERF_BAR] = "Bar",
     // printf format of the overlay line in FPS mode: the frame rate
     [UI_PERF_LINE_FPS] = "%.0f fps",
     [UI_MENU_GRAPHICS] = "Picture",
@@ -560,7 +561,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PERF_OVERLAY_DESC] = "Частота кадров в правом верхнем углу. «Полный» добавляет время кадров с графиком, "
                                   "загрузку ЦП, GPU и памяти, температуры и ожидания потока отрисовки. F10 переключает "
                                   "режимы.",
-    [UI_MENU_PERF_OFF] = "Выкл.", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Полный",
+    [UI_MENU_PERF_OFF] = "Выкл.", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Полный", [UI_MENU_PERF_BAR] = "Полоса",
     [UI_PERF_LINE_FPS] = "%.0f к/с",
     [UI_MENU_GRAPHICS] = "Изображение",
     [UI_MENU_OUTPUT_RES] = "Разрешение игры",
@@ -1099,7 +1100,7 @@ static const char *const text_pt_br[UI_TEXT_COUNT] = {
     [UI_MENU_PERF_OVERLAY_DESC] = "Taxa de quadros no canto superior direito. Completo adiciona os tempos de quadro com "
                                   "gráfico, o uso de CPU, GPU e memória, as temperaturas e as esperas da thread de "
                                   "renderização. F10 alterna os modos.",
-    [UI_MENU_PERF_OFF] = "Desligado", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Completo",
+    [UI_MENU_PERF_OFF] = "Desligado", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Completo", [UI_MENU_PERF_BAR] = "Barra",
     [UI_PERF_LINE_FPS] = "%.0f fps",
     [UI_MENU_GRAPHICS] = "Imagem",
     [UI_MENU_OUTPUT_RES] = "Resolução do jogo",
@@ -1647,7 +1648,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
                                   "按 F10 循环切换模式。",
     [UI_MENU_PERF_OFF] = "关",
     [UI_MENU_PERF_FPS] = "FPS",
-    [UI_MENU_PERF_FULL] = "完整",
+    [UI_MENU_PERF_FULL] = "完整", [UI_MENU_PERF_BAR] = "横条",
 
     [UI_PERF_LINE_FPS] = "%.0f fps",
 
@@ -2225,8 +2226,9 @@ static const char *const text_de[UI_TEXT_COUNT] = {
     [UI_MENU_PERF_OVERLAY] = "Leistungsanzeige",
     [UI_MENU_PERF_OVERLAY_DESC] = "Bildrate oben rechts in der Ecke. Vollständig zeigt zusätzlich Bildzeiten mit Graph, "
                                   "die Auslastung von CPU, GPU und Speicher, Temperaturen und die Wartezeiten des "
-                                  "Render-Threads. F10 wechselt zwischen den Modi.",
-    [UI_MENU_PERF_OFF] = "Aus", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Vollständig",
+                                  "Render-Threads. Leiste zeigt die wichtigsten Werte in einem Streifen oben über die "
+                                  "ganze Bildbreite. F10 wechselt zwischen den Modi.",
+    [UI_MENU_PERF_OFF] = "Aus", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "Vollständig", [UI_MENU_PERF_BAR] = "Leiste",
     // printf format of the overlay line in FPS mode: the frame rate
     [UI_PERF_LINE_FPS] = "%.0f fps",
     [UI_MENU_GRAPHICS] = "Bild",

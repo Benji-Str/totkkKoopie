@@ -158,7 +158,8 @@
 # in front again. 0: it pauses when its window loses focus, as it does on the Switch when Home is pressed; a load
 # interrupted that way can stop for good. Read at each focus change.
 # assume_focus = 1
-# Performance overlay in the top right corner: off, fps, or full (frame rate, mean and longest frame time). F10
+# Performance overlay: off, fps (top right corner), full (a panel in the top right corner) or bar (the main numbers
+# of full in a strip across the top: frame rate, frame time, GPU, VRAM, CPU, RAM). F10
 # cycles the modes in game, as do both stick clicks (L3 + R3) on a controller.
 # perf_overlay = off
 # Which GPU to use: its index in the log, or part of its name. Default: the first discrete GPU with Vulkan 1.3.
