@@ -1714,8 +1714,9 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
 }
 
 // The bar: full's main numbers in one strip across the top of the window, left to right: the frame rate with its 1%
-// low, the frame time with its longest, then GPU, VRAM, CPU and RAM. A label in its colour, then its numbers; "-" for
-// a number the machine does not give. Under the menu while it is open, like the fps line.
+// low, the frame time with its longest, then GPU, VRAM, CPU and RAM (the machine's, then the game's own). A label in
+// its colour, then its numbers; "-" for a number the machine does not give. Under the menu while it is open, like the
+// fps line.
 static void perf_bar_draw(const MenuTarget *t, float scale) {
     PerfStats s;
     perfmon_snapshot(&s);
@@ -1763,6 +1764,7 @@ static void perf_bar_draw(const MenuTarget *t, float scale) {
     text(menu_text(UI_MENU_OV_RAM), label_c[5]);
     num(UI_MENU_OV_FMT_GB, perf_gb(s.ram_used_mb));
     num(UI_MENU_OV_FMT_GB_OF, perf_gb(s.ram_total_mb), true);
+    num(UI_MENU_OV_GAME_GB, perf_gb(s.ram_game_mb));   // the machine's number holds every program: the game's own too
 }
 
 static void perf_draw(const MenuTarget *t, float scale) {
