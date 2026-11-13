@@ -1850,6 +1850,18 @@ int plat_udp_recv(PlatUdp *u, void *buf, size_t cap, PlatUdpAddr *from, uint32_t
     return (int)got;
 }
 
+uint32_t plat_udp_local_ip(void) {
+    int s = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
+    if (s < 0) return 0;
+    struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(9), .sin_addr.s_addr = htonl(0xc0000201u)}, me;
+    socklen_t len = sizeof me;
+    uint32_t ip = 0;
+    if (!connect(s, (const struct sockaddr *)&to, sizeof to) && !getsockname(s, (struct sockaddr *)&me, &len))
+        ip = ntohl(me.sin_addr.s_addr);
+    close(s);
+    return ip;
+}
+
 void plat_udp_close(PlatUdp *u) {
     if (!u) return;
     close(u->fd);

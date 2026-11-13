@@ -50,6 +50,7 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "coop.h"
 #include "gfx.h"
 #include "host.h"
 #include "layout.h"
@@ -190,6 +191,7 @@ static uint64_t read_ptr(uint64_t a) {
 // TOTK_GAME_V121/V143). The 1.1.0 slot was measured from its own dereference chain: 181 scene accesses in that build
 // read it, and one of them reproduces this walk (the 14-component check, component 13, the 0x70 stride and the name
 // compare) instruction for instruction.
+static uint64_t player_actor;   // the actor of the last player_pos, 0 when it found none
 static int player_pos(float xyz[3]) {
     uint64_t module = read_ptr(MOD_MAIN_BASE + (RT_V143 ? 0x3add238 : RT_V110 ? 0x4630a68 : 0x4728538)),
              scene = module ? read_ptr(module + 0x1e8) : 0;
@@ -202,9 +204,12 @@ static int player_pos(float xyz[3]) {
         uint64_t data = read_ptr(links + (uint64_t)i * 0x70 + 8), actor = data ? read_ptr(data + 0x40) : 0;
         uint64_t name = actor ? read_ptr(actor + 0x218) : 0;
         char text[7];
-        if (name && read_guest(name, text, 7) && !memcmp(text, "Player", 7))
+        if (name && read_guest(name, text, 7) && !memcmp(text, "Player", 7)) {
+            player_actor = actor;
             return read_guest(actor + 0x2b4, xyz, 12) && isfinite(xyz[0]) && isfinite(xyz[2]);
+        }
     }
+    player_actor = 0;
     return 0;
 }
 
@@ -269,8 +274,48 @@ static void world_clock(double dt, double step) {
     atomic_store_explicit(&world_us, w + (int64_t)(step * 1e6 + 0.5), memory_order_relaxed);
 }
 
+// The co-op link's player hook (coop.h): while the link runs, the player actor's position goes out as this side's
+// pose 30 times a second, the link's send rate. Each sample is a dozen guest reads (player_pos). Yaw is the heading
+// of the actor's forward axis: the third column of its rotation (actor +0x2c0, nine floats in rows; MacNativeGames
+// game_version.h GAME_ACTOR_ROT) on the ground plane. A rotation that does not read back as one (not finite, or
+// the axis nearly vertical) leaves the yaw of the sample before. Without a player actor (title screen, loading)
+// nothing is published, and the pose the peer holds ages out there.
+static void coop_player(void) {
+    static uint64_t last_ns_;
+    static float last[3], yaw;
+    static int have, logged;
+    if (!coop_link_state()) return;
+    coop_trace_present();
+    uint64_t now = plat_now_ns();
+    if (have) coop_puppet_present(last, player_actor);   // every present: the peer's actor follows without steps
+    if (last_ns_ && now - last_ns_ < 33000000ull) return;
+    last_ns_ = now;
+    CoopPose p = {0};
+    if (!player_pos(p.pos) || fabsf(p.pos[0]) + fabsf(p.pos[2]) < 1.0f) {   // the origin: a load in progress
+        have = 0;
+        return;
+    }
+    float rot[9];
+    if (read_guest(player_actor + 0x2c0, rot, sizeof rot) && isfinite(rot[2]) && isfinite(rot[8]) &&
+        rot[2] * rot[2] + rot[8] * rot[8] > 0.01f)
+        yaw = atan2f(rot[2], rot[8]);
+    memcpy(last, p.pos, sizeof last);
+    have = 1;
+    p.yaw = yaw;
+    p.status = COOP_VALID;
+    coop_publish_local(&p);
+    if (!logged) {
+        logged = 1;
+        rt_log("coop: player hook: the first pose at %.1f %.1f %.1f", p.pos[0], p.pos[1], p.pos[2]);
+    }
+}
+
+// ui/menu.cpp: a run that ends by itself (--seconds) has no player to answer a start screen.
+int rt_unattended(void) { return rt_config()->seconds > 0; }
+
 void frame_step_present(uint64_t display_ns, int interval) {
     frame_limit_live();
+    coop_player();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
     if (step_word && last_ns) {
         if (dt > STEP_RESET_S || dt < 0.001) {

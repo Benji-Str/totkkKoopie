@@ -895,7 +895,7 @@ static void tab_controls(float scale) {
 static void tab_menu(float scale) {
     opt_begin("##menu", scale);
     static const UiTextId langs[] = {UI_MENU_MENU_LANG_AUTO, UI_MENU_LANGNAME_EN, UI_MENU_LANGNAME_RU,
-                                     UI_MENU_LANGNAME_PT_BR, UI_MENU_LANGNAME_ZH_HANS};
+                                     UI_MENU_LANGNAME_PT_BR, UI_MENU_LANGNAME_ZH_HANS, UI_MENU_LANGNAME_DE};
     opt_choice("TOTK_MENU_LANG", UI_MENU_MENU_LANG, langs, sizeof langs / sizeof *langs, UI_MENU_MENU_LANG_DESC);
     opt_toggle("TOTK_DISCORD_RPC", UI_MENU_DISCORD_RPC, UI_MENU_DISCORD_RPC_DESC);
     opt_end();
@@ -1268,7 +1268,195 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
     ImGui::End();
 }
 
+// ---- the start screen: single player, or a co-op session as host or guest (coop.h coop_host, coop_join), so nobody
+// has to write addresses into totk.ini. It is this menu's window in the same dark green and gold with a framed panel,
+// shown over the game's title screen from the first frame until the player chose; the game gets no input meanwhile, as
+// with the settings menu. Not shown when totk.ini already sets coop = 1, with start_menu = 0, or in a run without a
+// player at the controls (--seconds, a scripted input, input = none, the menu test). TOTK_START_MENU_SHOT=<path> shows
+// it in such a run too, on the page TOTK_START_MENU_PAGE (1 main, 2 multiplayer, 3 host, 4 join), and saves the frame
+// after one second.
+extern "C" int rt_unattended(void);   // frame_rate.c: the run ends by itself (--seconds)
 static int g_save_pending;   // a changed setting still waits for its write to totk.ini (opt_save_tick)
+
+enum { START_OFF, START_MAIN, START_MULTI, START_HOST, START_JOIN };
+static int g_start = -1;        // -1: not decided yet
+static int g_start_focus;       // the page changed: its first button takes the cursor
+static int g_start_frames;
+static int g_host_state;        // 0 not tried, 1 the link runs, -1 it could not start
+static int g_join_state;
+static char g_join_addr[32], g_local_ip[32];
+
+static int start_wanted(void) {
+    const char *in = cfg_get("TOTK_INPUT"), *script = cfg_get("TOTK_INPUT_SCRIPT"), *shot = cfg_get("TOTK_START_MENU_SHOT");
+    if (shot && *shot) return 1;
+    if (!cfg_bool("TOTK_START_MENU") || cfg_bool("TOTK_COOP") || g_test.at) return 0;
+    return !(rt_unattended() || (script && *script) || (in && !strcmp(in, "none")));
+}
+
+static void start_page(int page) {
+    g_start = page;
+    g_start_focus = 1;
+    if (page == START_HOST && !g_host_state) {
+        g_host_state = coop_host() ? 1 : -1;
+        if (!coop_local_ip(g_local_ip)) g_local_ip[0] = 0;
+    }
+    if (page == START_JOIN && !g_join_addr[0]) {   // the address of the last session
+        const char *last = cfg_get("TOTK_COOP_PEER");
+        PlatUdpAddr a;
+        if (last && coop_parse_addr(last, 1, &a)) snprintf(g_join_addr, sizeof g_join_addr, "%s", last);
+    }
+}
+
+static void start_done(void) {
+    g_start = START_OFF;
+    set_open(0);
+}
+
+static void start_centered(const char *text, const ImVec4 &col) {
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(text).x) * 0.5f);
+    ImGui::TextColored(col, "%s", text);
+}
+
+static bool start_button(UiTextId id, float w, float h, bool enabled = true) {
+    if (g_start_focus) {
+        ImGui::SetKeyboardFocusHere();
+        g_start_focus = 0;
+    }
+    ImGui::BeginDisabled(!enabled);
+    bool hit = ImGui::Button(menu_text(id), ImVec2(w, h));
+    ImGui::EndDisabled();
+    return hit;
+}
+
+static void layout_start(uint32_t w, uint32_t h, float scale) {
+    const ImVec4 gold(0.93f, 0.76f, 0.33f, 1), dim(0.70f, 0.74f, 0.66f, 1), bad(0.95f, 0.45f, 0.35f, 1), good(0.55f, 0.90f, 0.62f, 1);
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)w, (float)h), IM_COL32(3, 12, 10, 200));
+    float ww = fminf(w * 0.62f, 780 * scale);
+    ImGui::SetNextWindowPos(ImVec2(w * 0.5f, h * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(ww, 0), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.03f, 0.10f, 0.085f, 0.97f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(46 * scale, 40 * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(14 * scale, 16 * scale));
+    ImGui::Begin("##start", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                         ImGuiWindowFlags_AlwaysAutoResize);
+    const ImGuiStyle &st = ImGui::GetStyle();
+    float bw = ww - st.WindowPadding.x * 2, bh = ImGui::GetFrameHeight() * 1.45f;
+    int port = cfg_int("TOTK_COOP_PORT");
+    char line[160], peer[32];
+    bool back = ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+
+    start_centered(menu_text(g_start == START_MAIN ? UI_MENU_START_TITLE : g_start == START_HOST ? UI_MENU_START_HOST
+                             : g_start == START_JOIN ? UI_MENU_START_JOIN : UI_MENU_START_MULTI), gold);
+    ImVec2 p0 = ImGui::GetCursorScreenPos();   // a gold rule with a diamond under the title
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float cx = p0.x + bw * 0.5f, ry = p0.y + 4 * scale, d = 7 * scale;
+    dl->AddLine(ImVec2(p0.x, ry), ImVec2(cx - d * 2, ry), IM_COL32(237, 194, 84, 170), 1.5f * scale);
+    dl->AddLine(ImVec2(cx + d * 2, ry), ImVec2(p0.x + bw, ry), IM_COL32(237, 194, 84, 170), 1.5f * scale);
+    dl->AddQuadFilled(ImVec2(cx, ry - d), ImVec2(cx + d, ry), ImVec2(cx, ry + d), ImVec2(cx - d, ry), IM_COL32(237, 194, 84, 235));
+    ImGui::Dummy(ImVec2(bw, 14 * scale));
+
+    switch (g_start) {
+    case START_MAIN:
+        if (start_button(UI_MENU_START_SINGLE, bw, bh)) start_done();
+        if (g_start && start_button(UI_MENU_START_MULTI, bw, bh)) start_page(START_MULTI);
+        break;
+    case START_MULTI:
+        if (start_button(UI_MENU_START_HOST, bw, bh)) start_page(START_HOST);
+        else if (start_button(UI_MENU_START_JOIN, bw, bh)) start_page(START_JOIN);
+        else if (start_button(UI_MENU_START_BACK, bw, bh) || back) start_page(START_MAIN);
+        break;
+    case START_HOST:
+        if (g_host_state < 0) {
+            snprintf(line, sizeof line, menu_text(UI_MENU_START_HOST_FAILED), port);
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextColored(bad, "%s", line);
+            ImGui::PopTextWrapPos();
+            if (start_button(UI_MENU_START_BACK, bw, bh) || back) g_host_state = 0, start_page(START_MULTI);
+            break;
+        }
+        snprintf(line, sizeof line, menu_text(UI_MENU_START_HOST_ADDR), g_local_ip[0] ? g_local_ip : menu_text(UI_MENU_START_NO_ADDR));
+        start_centered(line, ImVec4(0.96f, 0.94f, 0.88f, 1));
+        snprintf(line, sizeof line, menu_text(UI_MENU_START_HOST_PORT), port);
+        start_centered(line, dim);
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(dim, "%s", menu_text(UI_MENU_START_HOST_HINT));
+        ImGui::PopTextWrapPos();
+        if (coop_link_state() == 2 && coop_peer_text(peer)) {
+            snprintf(line, sizeof line, menu_text(UI_MENU_START_CONNECTED), peer);
+            start_centered(line, good);
+        } else {
+            start_centered(menu_text(UI_MENU_START_WAITING), gold);
+        }
+        if (start_button(UI_MENU_START_PLAY, bw, bh)) start_done();
+        break;
+    case START_JOIN: {
+        PlatUdpAddr a;
+        bool valid = coop_parse_addr(g_join_addr, (uint16_t)port, &a) != 0;
+        if (g_join_state > 0) {
+            snprintf(line, sizeof line, menu_text(coop_link_state() == 2 ? UI_MENU_START_JOINED : UI_MENU_START_JOINING), g_join_addr);
+            start_centered(line, coop_link_state() == 2 ? good : gold);
+            if (start_button(UI_MENU_START_PLAY, bw, bh)) start_done();
+            break;
+        }
+        start_centered(menu_text(UI_MENU_START_JOIN_PROMPT), dim);
+        ImGui::SetNextItemWidth(bw);
+        ImGui::InputText("##addr", g_join_addr, sizeof g_join_addr, ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
+        // the same on screen, for a controller: digits, the dot and a backspace
+        static const char *const keys[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "<"};
+        float kw = (bw - st.ItemSpacing.x * 2) / 3;
+        for (int k = 0; k < 12; k++) {
+            if (k % 3) ImGui::SameLine();
+            ImGui::PushID(k);
+            if (ImGui::Button(keys[k], ImVec2(kw, ImGui::GetFrameHeight() * 1.15f))) {
+                size_t n = strlen(g_join_addr);
+                if (keys[k][0] == '<') {
+                    if (n) g_join_addr[n - 1] = 0;
+                } else if (n + 1 < sizeof g_join_addr && n < 21) {
+                    g_join_addr[n] = keys[k][0], g_join_addr[n + 1] = 0;
+                }
+            }
+            ImGui::PopID();
+        }
+        if (g_join_state < 0) {
+            snprintf(line, sizeof line, menu_text(UI_MENU_START_HOST_FAILED), port);
+            ImGui::PushTextWrapPos(0);
+            ImGui::TextColored(bad, "%s", line);
+            ImGui::PopTextWrapPos();
+        } else if (g_join_addr[0] && !valid) {
+            start_centered(menu_text(UI_MENU_START_ADDR_BAD), dim);
+        }
+        if (start_button(UI_MENU_START_CONNECT, bw, bh, valid)) {
+            g_join_state = coop_join(g_join_addr) ? 1 : -1;
+            if (g_join_state > 0) {
+                cfg_set("TOTK_COOP_PEER", g_join_addr);   // offered again at the next start
+                cfg_save();
+                g_start_focus = 1;
+            }
+        } else if (start_button(UI_MENU_START_BACK, bw, bh) || (back && !ImGui::IsAnyItemActive())) {
+            start_page(START_MULTI);
+        }
+        break;
+    }
+    }
+
+    // the panel's frame: two gold lines and a diamond on each corner
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    ImDrawList *fl = ImGui::GetForegroundDrawList();
+    float in1 = 9 * scale, in2 = 15 * scale;
+    fl->AddRect(ImVec2(wp.x + in1, wp.y + in1), ImVec2(wp.x + ws.x - in1, wp.y + ws.y - in1), IM_COL32(237, 194, 84, 220), 10 * scale, 0,
+                2.0f * scale);
+    fl->AddRect(ImVec2(wp.x + in2, wp.y + in2), ImVec2(wp.x + ws.x - in2, wp.y + ws.y - in2), IM_COL32(60, 140, 110, 200), 7 * scale, 0,
+                1.0f * scale);
+    for (int k = 0; k < 4; k++) {
+        float x = k & 1 ? wp.x + ws.x - in1 : wp.x + in1, y = k & 2 ? wp.y + ws.y - in1 : wp.y + in1, r = 6 * scale;
+        fl->AddQuadFilled(ImVec2(x, y - r), ImVec2(x + r, y), ImVec2(x, y + r), ImVec2(x - r, y), IM_COL32(237, 194, 84, 255));
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+
 
 // ---- the performance overlay (TOTK_PERF_OVERLAY), in the top right corner. "fps": the frame rate over the presents of
 // the last half second. "full": a panel of perfmon.c's numbers, in the style of SavageWindRecomp's perf_overlay_draw
@@ -1602,6 +1790,18 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     perf_tick(plat_now_ns(), t);
     amiibo_tick();
     bool open = g_open.load(std::memory_order_relaxed);
+    if (g_start < 0) {   // the first frame: the start screen, when a player is there to answer it
+        g_start = START_OFF;
+        if (start_wanted()) {
+            const char *page = cfg_get("TOTK_START_MENU_PAGE");
+            int p = page ? atoi(page) : 0;
+            set_open(1);
+            open = true;
+            start_page(p >= START_MAIN && p <= START_JOIN ? p : START_MAIN);
+        }
+    } else if (g_start > START_OFF && !open) {   // closed with Esc or F1: single player
+        g_start = START_OFF;
+    }
     bool coop = coop_overlay_on();   // co-op markers: the overlay runs with the menu closed as well
     if (!open) {
         if (g_save_pending) g_save_pending = opt_save_tick(1);   // closed: the last change goes to totk.ini now
@@ -1661,11 +1861,16 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     }
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
-    if (open) layout_menu(t->width, t->height, scale);
+    if (open && g_start > START_OFF) layout_start(t->width, t->height, scale);
+    else if (open) layout_menu(t->width, t->height, scale);
     perf_draw(t, scale);
     if (coop) coop_draw(t, scale, open);
     ImGui::Render();
     if (open) g_save_pending = opt_save_tick(0);
+    if (g_start > START_OFF && ++g_start_frames == 60) {   // TOTK_START_MENU_SHOT: this frame's image goes to that file
+        const char *to = cfg_get("TOTK_START_MENU_SHOT");
+        if (to && *to) *shot = to;
+    }
     g_cost_ns += plat_now_ns() - t0;
     if (g_test.page >= 0 && frame >= g_test.opened + g_test.per_page * (uint64_t)(g_test.page + 1)) {
         static char path[512];   // this frame's image goes to a file; then the next tab, or the menu closes

@@ -6,8 +6,9 @@
 // replay exports (vk_dlaa.c). Nothing received is ever written into guest memory: a packet can at most move a marker.
 //
 // Who writes what (each value is a seqlock: readers never block a writer, and never see half a pose):
-//   local    the game side, coop_publish_local (the player hook still to come; until then coop_marker = 2 publishes the
-//            camera test point instead, see coop_view)
+//   local    the game side, coop_publish_local: the player actor's position at each present (frame_rate.c
+//            coop_player). While there is no player actor, coop_marker = 2 publishes the camera test point instead,
+//            see coop_view
 //   remote   the link thread, from the peer's packets
 //   camera   the replay, coop_camera_note at each present (vk_dlaa.c export_frame)
 #pragma once
@@ -85,6 +86,62 @@ void coop_pack(const CoopPose *p, uint8_t out[COOP_PACKET_BYTES]);
 int coop_unpack(const uint8_t *in, size_t n, CoopPose *out);
 // "a.b.c.d" or "a.b.c.d:port", numbers only: 1 when valid; without ":port", out->port = default_port
 int coop_parse_addr(const char *s, uint16_t default_port, PlatUdpAddr *out);
+
+// ---- the pose of the player's skeletons, for the peer's actor (coop_puppet.c): per bone its local translation and
+// rotation, the bone's flag word and seven values in units of 1/4096 (so within +-8), the 63 bones of the body and then the 35 of the face,
+// and after them, in the same units, the nine numbers of the rotation the bones hang on (the model's, in rows) and
+// the three of its offset from the pose's position.
+// The link sends the last published set after each pose packet while it is younger than 200 ms, as one datagram of
+// COOP_BONES_PACKET_BYTES: 0 magic "TKCB", 4 version, 5-7 zero, 8 seq, 12 the values, little endian. Every number of a
+// well-formed packet is in range; the flag words are the peer's as they are (coop_puppet.c pose_apply).
+#define COOP_BONES 98
+#define COOP_BONE_FIELDS 9   // the flag word's two halves, three of translation, four of rotation
+#define COOP_BONE_VALUES (COOP_BONES * COOP_BONE_FIELDS + 12)
+#define COOP_BONES_PACKET_BYTES (12u + COOP_BONE_VALUES * 2u)
+void coop_publish_bones(const int16_t v[COOP_BONE_VALUES]);
+int coop_read_remote_bones(int16_t out[COOP_BONE_VALUES], uint64_t max_age_ns);   // 1 when the peer's set is recent
+
+// ---- what the player wears: per slot of the equipment component the last piece the game put on through the player's
+// piece function (coop_puppet.c host_piece_note): its name and the call's other three arguments. The link sends the
+// last published table once a second and at once after a change, as one datagram: 0 magic "TKCE", 4 version, 5-7
+// zero, 8 gen, 12 the count of entries, then per entry the slot, the flags, w3 (4 bytes), the name's length and the
+// name (letters, digits and '_' only).
+#define COOP_EQUIP_SLOTS 24
+#define COOP_EQUIP_NAME 48           // with the terminating zero
+#define COOP_EQUIP_NOTED 0x80u       // flags: the slot has an entry
+#define COOP_EQUIP_W4 1u             // flags: the call's w4 and w5
+#define COOP_EQUIP_W5 2u
+#define COOP_EQUIP_WEAPON 4u         // flags: noted from the weapon function; w3 holds its x3 | x4 << 8 | x5 << 24
+#define COOP_EQUIP_PACKET_MAX (13u + COOP_EQUIP_SLOTS * (7u + COOP_EQUIP_NAME - 1u))
+typedef struct {
+    char name[COOP_EQUIP_SLOTS][COOP_EQUIP_NAME];
+    uint32_t w3[COOP_EQUIP_SLOTS];
+    uint8_t flags[COOP_EQUIP_SLOTS];
+    uint32_t gen;    // a new value with every change: the receiver dresses the puppet again when it differs
+    uint32_t pad;
+    uint64_t t_ns;
+} CoopEquip;
+void coop_publish_equip(const CoopEquip *e);
+int coop_read_remote_equip(CoopEquip *out);   // 1 once the peer sent a table
+size_t coop_pack_equip(const CoopEquip *e, uint8_t out[COOP_EQUIP_PACKET_MAX]);
+int coop_unpack_equip(const uint8_t *in, size_t n, CoopEquip *out);   // 1 when well formed
+
+// ---- the peer as an actor in the world (coop_puppet.c), coop_puppet = 1, 1.4.3 only. At each present, on the
+// presenting guest thread; self: this side's player position; player: its actor, 0 when not known.
+void coop_puppet_present(const float self[3], uint64_t player);
+
+// ---- a session started from the start menu (ui/menu.cpp) instead of totk.ini. One link per run: a second start
+// fails. A host opens coop_port and takes the sender of the first well-formed pose packet as its peer; a guest sends
+// to the host's address. Either way the peer is shown as an actor (coop_puppet.c) without coop_puppet being set.
+#define COOP_SESSION_NONE 0
+#define COOP_SESSION_HOST 1
+#define COOP_SESSION_JOIN 2
+int coop_host(void);                  // 1 when the link runs
+int coop_join(const char *addr);      // "a.b.c.d" or "a.b.c.d:port": 1 when the link runs
+int coop_session(void);               // COOP_SESSION_*
+int coop_peer_text(char out[32]);     // the peer's address, 1 once it is known
+int coop_local_ip(char out[32]);      // this machine's address on its default route, 0 when it has none
+void coop_trace_present(void);   // coop_puppet.c, the development trace TOTK_COOP_TRACE
 
 int probe_coop(void);   // --probe-coop: packets, addresses, projection, seqlock, UDP and the link over loopback
 

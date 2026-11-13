@@ -39,7 +39,7 @@ static const char *const known[] = {
     "BIND_SHAKE",
     "BIND_SKIP", "BIND_STATS", "BIND_UP", "BIND_X", "BIND_Y",
     "BIND_ZL", "BIND_ZR", "BLOCK_VIEWS_3D", "CLIMB_FIX", "CLOTH_REALTIME", "COLOR_BRIGHTNESS", "COLOR_CONTRAST", "COLOR_GAMMA",
-    "COLOR_PRESET", "COLOR_SATURATION", "CONTACT_DEBUG", "CONTACT_SHADOWS", "COOP", "COOP_MARKER", "COOP_PEER", "COOP_PORT", "CORE_DIAG", "CRIT", "CRIT_OUT",
+    "COLOR_PRESET", "COLOR_SATURATION", "CONTACT_DEBUG", "CONTACT_SHADOWS", "COOP", "COOP_MARKER", "COOP_PEER", "COOP_PORT", "COOP_PUPPET", "COOP_PUPPET_ACTOR", "COOP_PUPPET_DIAG", "COOP_PUPPET_HAIR", "CORE_DIAG", "CRIT", "CRIT_OUT",
     "DESC_TEMPLATE", "DESWIZZLE", "DEVICE_PROFILE", "DISCORD_APP_ID", "DISCORD_IMAGE", "DISCORD_RPC", "DLAA", "DLAA_JITTER", "DLAA_MV", "DLAA_MASKDEBUG", "DLAA_MVDEBUG", "DLAA_OBJMV", "DLAA_SURVEY", "DLAA_TIMES", "DLSS", "DLSS_CHAR_MASK", "DLSS_PRESET", "DLSS_REACTIVE", "DUMP", "DUMP_BUF", "DUMP_DIR",
     "DUMP_LOG", "DYNAMIC_RES", "DYN_DELTA", "EXEFS", "FEEDBACK", "FIXED_RES_PATCH", "FIX_C0", "FIX_ZERO", "FLIGHT", "FLIGHT_AT", "FLIGHT_DIR", "FLIGHT_FRAMES",
     "FLIGHT_SPIKE_MS", "FLIGHT_THUMBS", "FLUSH_SPAN", "FOV", "FOV_PATCH", "FPS60", "FPS_LIMIT", "FRAME_QUEUE",
@@ -57,7 +57,7 @@ static const char *const known[] = {
     "REPLAY_CHECK", "RESOLVE_CHECK", "RESTART_WAIT", "ROMFS", "ROMFS_INDEX", "ROMFS_MMAP", "ROMFS_MODS", "ROMFS_PATCHES",
     "ROMFS_PROOF_DIR", "ROMFS_VERIFY", "RSTICK_DEADZONE", "RUMBLE", "RUMBLE_CURVE", "RUMBLE_STRENGTH", "RUMBLE_TRIGGERS", "SHADER_CACHE",
     "SHADER_MEMO", "SHADOW_DEFER", "SHADOW_RANGE", "SHADOW_RES", "SHADOW_SCALE", "SHADOW_SNAP", "SHARED_FONTS", "SHARPNESS", "SHOTS", "SHOTS_DIR",
-    "SHOTS_FULL", "SPEED_PROBE", "SPIN", "SPIN_HANDOFF_US", "SPLIT_DRAWS", "SPLIT_US", "STICK_DEADZONE", "STICK_SENS",
+    "SHOTS_FULL", "SPEED_PROBE", "SPIN", "SPIN_HANDOFF_US", "SPLIT_DRAWS", "SPLIT_US", "START_MENU", "START_MENU_PAGE", "START_MENU_SHOT", "STICK_DEADZONE", "STICK_SENS",
     "SWKBD_ANSWER", "SYNC_AHEAD",
     "SWKBD_TEST", "TEST_OOM", "TEST_PAD", "TEST_PREPARE_SHADERS", "TEX_ALIAS", "TEX_BLOCK_MIB", "TEX_HEAP_EXTRA_MB", "TEX_MEMO", "TEX_RELEASED_MIB", "TEX_VRAM_PRESSURE", "TIMER_1MS", "TRACE", "TXD_TRANSPOSE", "UBO_SNAPSHOT", "UB_OVERLAY", "UB_OVERLAY_OUT", "UPSCALER", "VB_USED", "VK_DYN_A2C", "VK_DYN_VERTEX", "VK_NO_FLOAT64",
     "VK_PRESENT", "VK_RECORDER", "VK_SSBO_ALIGN", "VK_SUBGROUP", "VK_SUBGROUP_PIN", "VK_VALIDATION", "VMA_BLOCK_MIB", "VOLUME", "VRAM_HEADROOM", "VRAM_LIMIT_MIB", "VS_OUTS",
@@ -157,7 +157,7 @@ static const CfgMeta metas[] = {
     {"MOUSE_MODE", "direct", "stick|direct", LIVE},
     {"MOUSE_SENS", "1", "0..10", LIVE}, {"MOUSE_AIM_SCALE", "1", "0.1..3", LIVE}, {"MENU_CURSOR", "1", "0|1", LIVE},
     {"WALK_KEY", "none", NULL, LIVE}, {"WALK_SCALE", "0.51", "0.2..0.9", LIVE},
-    {"MENU_LANG", "", "en|ru|pt-BR|zh-Hans", LIVE},
+    {"MENU_LANG", "", "en|ru|pt-BR|zh-Hans|de", LIVE},
     {"AMIIBO_DIR", "", NULL, LIVE},
     // Discord Rich Presence (discord_rpc.c): off by default, the Menu tab of the settings menu switches it.
     {"DISCORD_RPC", "0", "0|1", LIVE},
@@ -166,6 +166,11 @@ static const CfgMeta metas[] = {
     // Local co-op link (coop.cpp), experimental: off by default. coop_peer has no default: a.b.c.d[:port] or loop.
     {"COOP", "0", "0|1", RESTART}, {"COOP_PORT", "27460", "1024..65535", RESTART}, {"COOP_PEER", "", NULL, RESTART},
     {"COOP_MARKER", "1", "0|1|2", LIVE},
+    // The start screen (ui/menu.cpp layout_start): single player, or a co-op session as host or guest.
+    {"START_MENU", "1", "0|1", RESTART},
+    // The peer as an actor in the world (coop_puppet.c): calls into the game, off by default.
+    {"COOP_PUPPET", "0", "0|1|2", RESTART}, {"COOP_PUPPET_ACTOR", "PouchPlayer", NULL, RESTART},
+    {"COOP_PUPPET_HAIR", "3", "0|1|2|3", RESTART},
     // Advanced: scheduling
     {"ASYNC_PREEMPT", "1", "0|1|2", RESTART}, {"REPLAY_ASYNC", "0", "0|1", RESTART},
     {"REPLAY_WORKERS", "0", "0..16", RESTART}, {"REPLAY_CHUNKS", "0", "0..64", RESTART},

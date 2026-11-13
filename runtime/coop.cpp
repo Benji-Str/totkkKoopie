@@ -2,10 +2,12 @@
 // that sends this side's pose to coop_peer and takes the peer's, and the overlay asks coop_view for its markers.
 //
 // The camera half: the replay exports the scene camera at each present (vk_dlaa.c export_frame), coop_view projects
-// the poses through it. coop_marker = 2 is the test mode for that path before a player hook exists: a point 10 m in
-// front of the camera (worked out from the view matrix alone) must land in the middle of the picture through the
-// view-projection, and is published as this side's pose, so with coop_peer = loop it comes back as the "peer" and its
-// marker covers the test cross; between two machines each sees the point in front of the other's camera.
+// the poses through it. coop_marker = 2 is the test mode for that path: a point 10 m in front of the camera (worked
+// out from the view matrix alone) must land in the middle of the picture through the view-projection. While the
+// player hook (frame_rate.c coop_player) publishes no pose (no player actor: the title screen, a load), the point is
+// published as this side's pose, so with coop_peer = loop it comes back as the "peer" and its marker covers the test
+// cross. With a player in the world the hook's pose goes out instead, and with coop_peer = loop the peer's marker
+// sits on this side's own player.
 #include <atomic>
 #include <math.h>
 #include <stdint.h>
@@ -70,8 +72,20 @@ template <class T> struct Seq {
     }
 };
 
+struct CoopBones {
+    int16_t v[COOP_BONE_VALUES];
+    uint32_t seq;
+    uint64_t t_ns;
+};
+#define COOP_BONES_MAGIC 0x42434b54u   // "TKCB"
+#define BONES_MAX_AGE_NS 200000000ull
+#define COOP_EQUIP_MAGIC 0x45434b54u   // "TKCE"
+#define EQUIP_EVERY_NS 1000000000ull
+
 struct CoopState {
     Seq<CoopPose> local, remote;
+    Seq<CoopBones> local_bones, remote_bones;
+    Seq<CoopEquip> local_equip, remote_equip;
     Seq<CoopCamera> camera;
     std::atomic<int> on{0};            // the link thread runs
     std::atomic<int> cam_wanted{0};    // coop_view draws markers: the replay exports the camera
@@ -100,6 +114,29 @@ extern "C" int coop_read_remote(CoopPose *out, uint64_t max_age_ns) {
     if (!S.remote.load(out) || !(out->status & COOP_VALID)) return 0;
     return out->t_ns + max_age_ns >= plat_now_ns();   // t_ns may be a hair after a reader's clock: no subtraction
 }
+
+extern "C" void coop_publish_bones(const int16_t v[COOP_BONE_VALUES]) {
+    static CoopBones b;   // the presenting thread only; 1.4 KiB kept off its stack
+    memcpy(b.v, v, sizeof b.v);
+    b.seq = 0, b.t_ns = plat_now_ns();
+    S.local_bones.store(b);
+}
+
+extern "C" int coop_read_remote_bones(int16_t out[COOP_BONE_VALUES], uint64_t max_age_ns) {
+    static CoopBones b;   // the presenting thread only
+    if (!S.remote_bones.load(&b) || b.t_ns + max_age_ns < plat_now_ns()) return 0;
+    memcpy(out, b.v, sizeof b.v);
+    return 1;
+}
+
+extern "C" void coop_publish_equip(const CoopEquip *e) {
+    static CoopEquip b;
+    b = *e;
+    b.t_ns = plat_now_ns();
+    S.local_equip.store(b);
+}
+
+extern "C" int coop_read_remote_equip(CoopEquip *out) { return S.remote_equip.load(out); }
 
 extern "C" int coop_link_state(void) {
     if (!S.on.load(std::memory_order_relaxed)) return 0;
@@ -158,8 +195,10 @@ static int project(const CoopCamera *c, const double p[3], const float rect[4], 
     return on ? 1 : 2;
 }
 
+// A player's pose is the actor's position, at its feet (frame_rate.c coop_player): its marker goes a metre above, at
+// the body. The camera test point is drawn where it is.
 static int project_pose(const CoopCamera *c, const CoopPose *p, const float rect[4], float xy[2]) {
-    double q[3] = {p->pos[0], p->pos[1], p->pos[2]};
+    double q[3] = {p->pos[0], p->pos[1] + (p->status & COOP_TEST ? 0.0 : 1.0), p->pos[2]};
     return project(c, q, rect, xy, NULL);
 }
 
@@ -225,6 +264,54 @@ static uint32_t get32(const uint8_t *p) { return p[0] | (uint32_t)p[1] << 8 | (u
 static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static float bitsf(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 
+static int name_ok(const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char ch = s[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_')) return 0;
+    }
+    return 1;
+}
+
+extern "C" size_t coop_pack_equip(const CoopEquip *e, uint8_t out[COOP_EQUIP_PACKET_MAX]) {
+    put32(out, COOP_EQUIP_MAGIC);
+    out[4] = COOP_VERSION, out[5] = out[6] = out[7] = 0;
+    put32(out + 8, e->gen);
+    size_t n = 13;
+    uint8_t count = 0;
+    for (unsigned s = 0; s < COOP_EQUIP_SLOTS; s++) {
+        if (!(e->flags[s] & COOP_EQUIP_NOTED)) continue;
+        size_t len = strnlen(e->name[s], COOP_EQUIP_NAME - 1);
+        if (!name_ok(e->name[s], len)) continue;
+        out[n] = (uint8_t)s, out[n + 1] = e->flags[s];
+        put32(out + n + 2, e->w3[s]);
+        out[n + 6] = (uint8_t)len;
+        memcpy(out + n + 7, e->name[s], len);
+        n += 7 + len, count++;
+    }
+    out[12] = count;
+    return n;
+}
+
+extern "C" int coop_unpack_equip(const uint8_t *in, size_t n, CoopEquip *out) {
+    if (n < 13 || n > COOP_EQUIP_PACKET_MAX || get32(in) != COOP_EQUIP_MAGIC || in[4] != COOP_VERSION || in[5] || in[6] || in[7])
+        return 0;
+    memset(out, 0, sizeof *out);
+    out->gen = get32(in + 8);
+    size_t at = 13;
+    for (unsigned k = 0; k < in[12]; k++) {
+        if (at + 7 > n) return 0;
+        unsigned s = in[at], len = in[at + 6];
+        if (s >= COOP_EQUIP_SLOTS || len >= COOP_EQUIP_NAME || at + 7 + len > n || !(in[at + 1] & COOP_EQUIP_NOTED) ||
+            (in[at + 1] & ~(COOP_EQUIP_NOTED | COOP_EQUIP_W4 | COOP_EQUIP_W5 | COOP_EQUIP_WEAPON)) || !name_ok((const char *)in + at + 7, len))
+            return 0;
+        out->flags[s] = in[at + 1], out->w3[s] = get32(in + at + 2);
+        memcpy(out->name[s], in + at + 7, len);
+        out->name[s][len] = 0;
+        at += 7 + len;
+    }
+    return at == n;
+}
+
 extern "C" void coop_pack(const CoopPose *p, uint8_t out[COOP_PACKET_BYTES]) {
     put32(out, COOP_MAGIC);
     out[4] = COOP_VERSION, out[5] = out[6] = out[7] = 0;
@@ -276,30 +363,56 @@ extern "C" int coop_parse_addr(const char *s, uint16_t default_port, PlatUdpAddr
 
 struct Link {
     PlatUdp *u;
-    PlatUdpAddr peer;
+    PlatUdpAddr peer;         // ip 0 with learn set: not known yet
     std::atomic<int> *stop;   // NULL: runs until the process ends
+    // A host's peer (coop_host): the sender of the first well-formed pose packet, as ip << 16 | port, 0 until then.
+    // Whoever reaches the port first is the peer for the rest of the run, so hosting is for a network one trusts.
+    std::atomic<uint64_t> *learn;
 };
 
 // Sends this side's pose (or a keep-alive without COOP_VALID when none is recent) COOP_HZ times a second and waits for
 // the peer's packets in between. Only packets from the peer's address and port count, and only newer ones than the
-// last: after COOP_TIMEOUT_NS of silence the peer may have restarted, and its count with it.
+// last: after COOP_TIMEOUT_NS of silence the peer may have restarted, and its count with it. A host that has no peer
+// yet sends nothing.
 static void link_run(const Link *k) {
     const uint64_t period = 1000000000ull / COOP_HZ;
     uint64_t next = plat_now_ns(), last_ok = 0;
     uint32_t tx_seq = 0, last_seq = 0;
+    PlatUdpAddr peer = k->peer;
     while (!k->stop || !k->stop->load(std::memory_order_relaxed)) {
         uint64_t now = plat_now_ns();
         if (now >= next) {
-            CoopPose p;
-            if (!S.local.load(&p) || p.t_ns + COOP_TIMEOUT_NS < now) memset(&p, 0, sizeof p);
-            p.seq = ++tx_seq;   // the wire count is the link's own: the receiver orders packets by it
-            uint8_t pkt[COOP_PACKET_BYTES];
-            coop_pack(&p, pkt);
-            if (plat_udp_send(k->u, &k->peer, pkt, sizeof pkt)) S.tx.fetch_add(1, std::memory_order_relaxed);
+            if (peer.ip) {
+                CoopPose p;
+                if (!S.local.load(&p) || p.t_ns + COOP_TIMEOUT_NS < now) memset(&p, 0, sizeof p);
+                p.seq = ++tx_seq;   // the wire count is the link's own: the receiver orders packets by it
+                uint8_t pkt[COOP_PACKET_BYTES];
+                coop_pack(&p, pkt);
+                if (plat_udp_send(k->u, &peer, pkt, sizeof pkt)) S.tx.fetch_add(1, std::memory_order_relaxed);
+                CoopBones lb;
+                if (S.local_bones.load(&lb) && lb.t_ns + BONES_MAX_AGE_NS >= now) {
+                    uint8_t bp[COOP_BONES_PACKET_BYTES];
+                    put32(bp, COOP_BONES_MAGIC);
+                    bp[4] = COOP_VERSION, bp[5] = bp[6] = bp[7] = 0;
+                    put32(bp + 8, tx_seq);
+                    for (unsigned i = 0; i < COOP_BONE_VALUES; i++)
+                        bp[12 + 2 * i] = (uint8_t)lb.v[i], bp[13 + 2 * i] = (uint8_t)((uint16_t)lb.v[i] >> 8);
+                    plat_udp_send(k->u, &peer, bp, sizeof bp);
+                }
+                static CoopEquip le;   // the link thread only
+                static uint32_t sent_gen;
+                static uint64_t sent_equip_ns;
+                if (S.local_equip.load(&le) && (le.gen != sent_gen || now - sent_equip_ns >= EQUIP_EVERY_NS)) {
+                    uint8_t ep[COOP_EQUIP_PACKET_MAX];
+                    size_t en = coop_pack_equip(&le, ep);
+                    plat_udp_send(k->u, &peer, ep, en);
+                    sent_gen = le.gen, sent_equip_ns = now;
+                }
+            }
             next += period;
             if (next <= now) next = now + period;   // after a stall: no burst to catch up
         }
-        uint8_t buf[64];
+        uint8_t buf[(COOP_BONES_PACKET_BYTES > COOP_EQUIP_PACKET_MAX ? COOP_BONES_PACKET_BYTES : COOP_EQUIP_PACKET_MAX) + 4];
         PlatUdpAddr from;
         uint64_t left = next > now ? next - now : 0;
         int n = plat_udp_recv(k->u, buf, sizeof buf, &from, (uint32_t)(left / 1000000u) + 1);
@@ -310,7 +423,35 @@ static void link_run(const Link *k) {
         }
         if (!n) continue;
         CoopPose r;
-        if (from.ip != k->peer.ip || from.port != k->peer.port || !coop_unpack(buf, (size_t)n, &r)) {
+        if (!peer.ip && k->learn && coop_unpack(buf, (size_t)n, &r)) {   // a host's first caller is its peer
+            peer = from;
+            k->learn->store((uint64_t)from.ip << 16 | from.port, std::memory_order_relaxed);
+            rt_log("coop: the peer is %u.%u.%u.%u:%u", from.ip >> 24, from.ip >> 16 & 255, from.ip >> 8 & 255, from.ip & 255,
+                   from.port);
+        }
+        if (n >= 13 && get32(buf) == COOP_EQUIP_MAGIC) {   // what the peer wears
+            static CoopEquip re;   // the link thread only
+            if (from.ip != peer.ip || from.port != peer.port || !coop_unpack_equip(buf, (size_t)n, &re)) {
+                S.dropped.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            re.t_ns = plat_now_ns();
+            S.remote_equip.store(re);
+            continue;
+        }
+        if ((size_t)n == COOP_BONES_PACKET_BYTES && get32(buf) == COOP_BONES_MAGIC) {   // the peer's bones
+            if (from.ip != peer.ip || from.port != peer.port || buf[4] != COOP_VERSION || buf[5] || buf[6] || buf[7]) {
+                S.dropped.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            CoopBones rb;
+            for (unsigned i = 0; i < COOP_BONE_VALUES; i++)
+                rb.v[i] = (int16_t)(uint16_t)(buf[12 + 2 * i] | buf[13 + 2 * i] << 8);
+            rb.seq = get32(buf + 8), rb.t_ns = plat_now_ns();
+            S.remote_bones.store(rb);
+            continue;
+        }
+        if (from.ip != peer.ip || from.port != peer.port || !coop_unpack(buf, (size_t)n, &r)) {
             S.dropped.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
@@ -329,38 +470,97 @@ static void link_run(const Link *k) {
 
 static void link_main(void *arg) { link_run((const Link *)arg); }
 
-extern "C" void coop_init(void) {
-    if (!cfg_bool("TOTK_COOP")) return;
+// The one link of this run: started by coop_init from totk.ini, or by coop_host / coop_join from the start menu.
+static Link g_link;
+static std::atomic<uint64_t> g_learned{0};
+static std::atomic<int> g_session{COOP_SESSION_NONE};
+static PlatMutex g_start_lock = PLAT_MUTEX_INIT;
+
+// peer.ip 0: a host, which learns its peer. 1 when the link thread runs.
+static int link_start(PlatUdpAddr peer, int port, int session) {
+    plat_mutex_lock(&g_start_lock);
+    int ok = 0;
+    uint32_t err = 0;
+    if (S.on.load(std::memory_order_relaxed)) {
+        rt_log("coop: the link runs already; one per run");
+    } else if (!(g_link.u = plat_udp_open(0, (uint16_t)port, &err))) {
+        rt_log("coop: cannot open UDP port %d (error %u): co-op stays off", port, err);
+    } else {
+        g_link.peer = peer, g_link.stop = NULL, g_link.learn = peer.ip ? NULL : &g_learned;
+        S.on.store(1, std::memory_order_relaxed);
+        S.cam_wanted.store(marker_setting() > 0, std::memory_order_relaxed);
+        if (!plat_thread_spawn(link_main, &g_link, "coop", 0)) {
+            rt_log("coop: cannot start the link thread: co-op stays off");
+            S.on.store(0, std::memory_order_relaxed);
+            S.cam_wanted.store(0, std::memory_order_relaxed);
+            plat_udp_close(g_link.u);
+        } else {
+            ok = 1;
+            g_session.store(session, std::memory_order_relaxed);
+            if (peer.ip)
+                rt_log("coop: link on UDP port %d to %u.%u.%u.%u:%u, %d packets a second (experimental)", port, peer.ip >> 24,
+                       peer.ip >> 16 & 255, peer.ip >> 8 & 255, peer.ip & 255, peer.port, COOP_HZ);
+            else
+                rt_log("coop: hosting on UDP port %d: the first caller is the peer (experimental)", port);
+        }
+    }
+    plat_mutex_unlock(&g_start_lock);
+    return ok;
+}
+
+static int link_port(void) {
     int port = cfg_int("TOTK_COOP_PORT");
     if (port < 1024 || port > 65535) {
         rt_log("coop: coop_port %d is not in 1024..65535: co-op stays off", port);
-        return;
+        return 0;
     }
-    static Link k;
+    return port;
+}
+
+extern "C" void coop_init(void) {
+    if (!cfg_bool("TOTK_COOP")) return;
+    int port = link_port();
+    if (!port) return;
+    PlatUdpAddr to;
     const char *peer = cfg_get("TOTK_COOP_PEER");
     int loop = peer && !strcmp(peer, "loop");
-    if (!loop && !coop_parse_addr(peer, (uint16_t)port, &k.peer)) {
+    if (!loop && !coop_parse_addr(peer, (uint16_t)port, &to)) {
         rt_log("coop: coop_peer '%s' is not a.b.c.d, a.b.c.d:port or loop: co-op stays off", peer ? peer : "");
         return;
     }
-    if (loop) k.peer = PlatUdpAddr{0x7f000001u, (uint16_t)port};
-    uint32_t err = 0;
-    k.u = plat_udp_open(0, (uint16_t)port, &err);
-    if (!k.u) {
-        rt_log("coop: cannot open UDP port %d (error %u): co-op stays off", port, err);
-        return;
-    }
-    S.on.store(1, std::memory_order_relaxed);
-    S.cam_wanted.store(marker_setting() > 0, std::memory_order_relaxed);
-    if (!plat_thread_spawn(link_main, &k, "coop", 0)) {
-        rt_log("coop: cannot start the link thread: co-op stays off");
-        S.on.store(0, std::memory_order_relaxed);
-        S.cam_wanted.store(0, std::memory_order_relaxed);
-        plat_udp_close(k.u);
-        return;
-    }
-    rt_log("coop: link on UDP port %d to %u.%u.%u.%u:%u, %d packets a second (experimental)", port,
-           k.peer.ip >> 24, k.peer.ip >> 16 & 255, k.peer.ip >> 8 & 255, k.peer.ip & 255, k.peer.port, COOP_HZ);
+    if (loop) to = PlatUdpAddr{0x7f000001u, (uint16_t)port};
+    link_start(to, port, COOP_SESSION_NONE);
+}
+
+// ---- a session from the start menu (ui/menu.cpp)
+
+extern "C" int coop_host(void) {
+    int port = link_port();
+    return port && link_start(PlatUdpAddr{0, 0}, port, COOP_SESSION_HOST);
+}
+
+extern "C" int coop_join(const char *addr) {
+    int port = link_port();
+    PlatUdpAddr to;
+    if (!port || !coop_parse_addr(addr, (uint16_t)port, &to)) return 0;
+    return link_start(to, port, COOP_SESSION_JOIN);
+}
+
+extern "C" int coop_session(void) { return g_session.load(std::memory_order_relaxed); }
+
+extern "C" int coop_peer_text(char out[32]) {
+    uint64_t v = g_link.learn ? g_learned.load(std::memory_order_relaxed) : (uint64_t)g_link.peer.ip << 16 | g_link.peer.port;
+    uint32_t ip = (uint32_t)(v >> 16);
+    if (!S.on.load(std::memory_order_relaxed) || !ip) return 0;
+    snprintf(out, 32, "%u.%u.%u.%u", ip >> 24, ip >> 16 & 255, ip >> 8 & 255, ip & 255);
+    return 1;
+}
+
+extern "C" int coop_local_ip(char out[32]) {
+    uint32_t ip = plat_udp_local_ip();
+    if (!ip) return 0;
+    snprintf(out, 32, "%u.%u.%u.%u", ip >> 24, ip >> 16 & 255, ip >> 8 & 255, ip & 255);
+    return 1;
 }
 
 // ---- --probe-coop: no game files, no window
@@ -430,6 +630,35 @@ extern "C" int probe_coop(void) {
     c = a, c.status = 0x80;
     coop_pack(&c, bad);
     CHECK(!coop_unpack(bad, sizeof bad, &b), "unknown status bits are refused");
+
+    {   // what the player wears
+        static CoopEquip e, f;
+        memset(&e, 0, sizeof e);
+        e.gen = 9;
+        snprintf(e.name[0], COOP_EQUIP_NAME, "Weapon_Sword_001");
+        e.flags[0] = COOP_EQUIP_NOTED | COOP_EQUIP_W5, e.w3[0] = 0xffffffffu;
+        snprintf(e.name[10], COOP_EQUIP_NAME, "Armor_001_Upper");
+        e.flags[10] = COOP_EQUIP_NOTED | COOP_EQUIP_W4 | COOP_EQUIP_W5, e.w3[10] = 3;
+        e.flags[3] = COOP_EQUIP_NOTED;   // an empty name: the slot was cleared
+        static uint8_t ep[COOP_EQUIP_PACKET_MAX];
+        size_t en = coop_pack_equip(&e, ep);
+        CHECK(coop_unpack_equip(ep, en, &f) && f.gen == 9 && !strcmp(f.name[0], e.name[0]) && !strcmp(f.name[10], e.name[10]) &&
+                  f.flags[10] == e.flags[10] && f.w3[10] == 3 && f.flags[3] == COOP_EQUIP_NOTED && !f.name[3][0] && !f.flags[1],
+              "an equipment table unpacks to what was packed");
+        CHECK(!coop_unpack_equip(ep, en - 1, &f), "a short equipment packet is refused");
+        size_t at = 13 + 7;   // the first entry's name
+        ep[at] = '/';
+        CHECK(!coop_unpack_equip(ep, en, &f), "a name with other characters is refused");
+        ep[at] = 'W', ep[13] = COOP_EQUIP_SLOTS;
+        CHECK(!coop_unpack_equip(ep, en, &f), "a slot out of range is refused");
+        for (int s = 0; s < COOP_EQUIP_SLOTS; s++) {   // the largest table fits
+            memset(e.name[s], 'A', COOP_EQUIP_NAME - 1), e.name[s][COOP_EQUIP_NAME - 1] = 0;
+            e.flags[s] = COOP_EQUIP_NOTED;
+        }
+        en = coop_pack_equip(&e, ep);
+        CHECK(en == COOP_EQUIP_PACKET_MAX && coop_unpack_equip(ep, en, &f) && !strcmp(f.name[23], e.name[23]),
+              "a full equipment table fits one packet");
+    }
 
     // addresses
     PlatUdpAddr ad;

@@ -162,7 +162,8 @@ const RtConfig *rt_config(void) { return &cfg; }
 
 // ---- runtime services the generated code calls (cpu.h)
 volatile int g_fnprof = 0;   // resolution.c switches it on until the game sets its render size (res_fn_hit)
-void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0) { (void)lr, res_fn_hit(addr, x0); }
+void coop_trace_hit(uint64_t addr, uint64_t lr);   // coop_puppet.c, TOTK_COOP_TRACE
+void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0) { res_fn_hit(addr, x0), coop_trace_hit(addr, lr); }
 
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) {
     char at[128], lr[128];

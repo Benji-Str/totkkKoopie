@@ -1985,6 +1985,19 @@ int plat_udp_recv(PlatUdp *u, void *buf, size_t cap, PlatUdpAddr *from, uint32_t
     return got;
 }
 
+uint32_t plat_udp_local_ip(void) {
+    plat_once(&wsa_once, wsa_start, NULL);
+    if (wsa_err) return 0;
+    SOCKET s = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    if (s == INVALID_SOCKET) return 0;
+    struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(9), .sin_addr.s_addr = htonl(0xc0000201u)}, me;
+    int len = sizeof me;
+    uint32_t ip = 0;
+    if (!connect(s, (const struct sockaddr *)&to, sizeof to) && !getsockname(s, (struct sockaddr *)&me, &len))
+        ip = ntohl(me.sin_addr.s_addr);
+    closesocket(s);
+    return ip;
+}
 void plat_udp_close(PlatUdp *u) {
     if (!u) return;
     closesocket(u->s);

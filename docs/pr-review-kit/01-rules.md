@@ -48,7 +48,7 @@
 - **Project tests** from [03-correctness.md](03-correctness.md): lifter differential tests, probes, `--selftest`,
   `tools/check_content.py --staged`.
 - **Text the player sees** goes into the catalog: `runtime/ui_text.h` ids and `runtime/ui_text.c` entries in every
-  language the menu has (English, Russian, Brazilian Portuguese, Simplified Chinese), and `installer/text/*.json` for
+  language the menu has (English, Russian, Brazilian Portuguese, Simplified Chinese, German), and `installer/text/*.json` for
   the installer. No hardcoded sentences, no second string table.
 - **A new setting** is described in `totk.ini.example` and [docs/settings.md](../../docs/settings.md).
 - **Licences.** MIT, BSD, ISC, zlib and Apache-2.0 code may be copied, with its header and a row in

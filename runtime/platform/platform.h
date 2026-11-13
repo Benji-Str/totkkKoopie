@@ -474,6 +474,9 @@ int plat_udp_send(PlatUdp *u, const PlatUdpAddr *to, const void *data, size_t n)
 // failed. *from (may be NULL) gets the sender. An ICMP "port unreachable" for an earlier send counts as none.
 int plat_udp_recv(PlatUdp *u, void *buf, size_t cap, PlatUdpAddr *from, uint32_t ms);
 void plat_udp_close(PlatUdp *u);   // NULL is fine
+// The IPv4 address this machine sends from on its default route, 0 when it has none. Asks the OS for the route of a
+// documentation address (192.0.2.1); no datagram is sent.
+uint32_t plat_udp_local_ip(void);
 
 // ---- restart: this program again, in a new process that starts once this one is gone
 // Starts this executable again with the same command line, environment and working folder, and no handle of this

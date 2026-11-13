@@ -11,8 +11,8 @@ typedef enum {
     UI_SWKBD_CANCEL,
     UI_SWKBD_PAD_HINT,       // how a controller answers
 
-    // Menu: window, tabs, bottom row. UI_MENU_FIRST..UI_MENU_LAST_ID carry English, Russian, Brazilian Portuguese and
-    // Simplified Chinese texts.
+    // Menu: window, tabs, bottom row. UI_MENU_FIRST..UI_MENU_LAST_ID carry English, Russian, Brazilian Portuguese,
+    // Simplified Chinese and German texts.
     UI_MENU_FIRST,
     UI_MENU_TITLE = UI_MENU_FIRST,
     UI_MENU_TAB_SCREEN, UI_MENU_TAB_GAME, UI_MENU_TAB_MODS, UI_MENU_TAB_SOUND, UI_MENU_TAB_CONTROLS, UI_MENU_TAB_AMIIBO,
@@ -241,7 +241,11 @@ typedef enum {
     UI_MENU_CHEAT_CODE_DESC, UI_MENU_CHEAT_KEY_DESC /* "%s": the buttons */, UI_MENU_CHEAT_DATA_DESC,
     UI_MENU_CHEAT_MASTER, UI_MENU_CHEAT_MASTER_DESC, UI_MENU_CHEAT_RESTORE, UI_MENU_CHEAT_RESTORE_DESC,
     UI_MENU_CHEAT_REBUILD, UI_MENU_CHEAT_REBUILD_DESC, UI_MENU_CHEAT_UNSUPPORTED, UI_MENU_CHEAT_UNSUPPORTED_DESC,
-    UI_MENU_LAST_ID = UI_MENU_CHEAT_UNSUPPORTED_DESC,
+    // the start screen (ui/menu.cpp layout_start): single player, or a co-op session as host or guest
+    UI_MENU_START_TITLE, UI_MENU_START_SINGLE, UI_MENU_START_MULTI, UI_MENU_START_HOST, UI_MENU_START_JOIN, UI_MENU_START_BACK, UI_MENU_START_PLAY,
+    UI_MENU_START_HOST_ADDR, UI_MENU_START_HOST_PORT, UI_MENU_START_HOST_HINT, UI_MENU_START_WAITING, UI_MENU_START_CONNECTED, UI_MENU_START_HOST_FAILED,   // _HOST_ADDR "%s", _HOST_PORT "%d", _CONNECTED "%s", _HOST_FAILED "%d"
+    UI_MENU_START_JOIN_PROMPT, UI_MENU_START_CONNECT, UI_MENU_START_JOINING, UI_MENU_START_JOINED, UI_MENU_START_ADDR_BAD, UI_MENU_START_NO_ADDR,   // _JOINING and _JOINED "%s": the address
+    UI_MENU_LAST_ID = UI_MENU_START_NO_ADDR,
     UI_TEXT_COUNT
 } UiTextId;
 
@@ -269,7 +273,7 @@ const char *ui_text_lang(const char *switch_code);
 typedef struct { const char *code; UiTextId name; } UiGameLang;
 int ui_text_game_langs(int game_version, UiGameLang *out, int max);
 
-// Menu text: ui_text_in(menu language, id). The menu language is TOTK_MENU_LANG ("en", "ru", "pt-BR", "zh-Hans");
-// unset, the system UI language when the catalog has menu text for it (English, Russian, Brazilian Portuguese,
-// Simplified Chinese), else English. Follows a live change of the setting.
+// Menu text: ui_text_in(menu language, id). The menu language is TOTK_MENU_LANG ("en", "ru", "pt-BR", "zh-Hans",
+// "de"); unset, the system UI language when the catalog has menu text for it (English, Russian, Brazilian Portuguese,
+// Simplified Chinese, German), else English. Follows a live change of the setting.
 const char *menu_text(UiTextId id);

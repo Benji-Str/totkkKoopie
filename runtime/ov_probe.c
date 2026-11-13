@@ -865,8 +865,8 @@ static void probe_fonts(void) {
            (unsigned long long)size, path);
 }
 
-// The host catalog (ui_text.c): every menu id has its own English, Russian, Brazilian Portuguese and Simplified
-// Chinese text, the software keyboard keeps its game-language rows, and menu_text follows TOTK_MENU_LANG.
+// The host catalog (ui_text.c): every menu id has its own English, Russian, Brazilian Portuguese, Simplified
+// Chinese and German text, the software keyboard keeps its game-language rows, and menu_text follows TOTK_MENU_LANG.
 static void probe_menu_text(void) {
     static const char *const langs[] = {"en", "ja", "fr", "de", "it", "es", "nl", "pt", "ru", "zh-Hans", "zh-Hant", "ko",
                                         "pt-BR"};
@@ -879,9 +879,11 @@ static void probe_menu_text(void) {
         CHECK(strlen(ui_text_in("en", (UiTextId)id)) + 256 < UI_DESC_BYTES &&
               strlen(ui_text_in("ru", (UiTextId)id)) + 256 < UI_DESC_BYTES &&
               strlen(ui_text_in("pt-BR", (UiTextId)id)) + 256 < UI_DESC_BYTES &&
-              strlen(ui_text_in("zh-Hans", (UiTextId)id)) + 256 < UI_DESC_BYTES,
+              strlen(ui_text_in("zh-Hans", (UiTextId)id)) + 256 < UI_DESC_BYTES &&
+              strlen(ui_text_in("de", (UiTextId)id)) + 256 < UI_DESC_BYTES,
               "menu text id %d is too long for the description pane", id);
         CHECK(ui_text_defined("zh-Hans", (UiTextId)id), "menu text id %d lacks Simplified Chinese", id);
+        CHECK(ui_text_defined("de", (UiTextId)id), "menu text id %d lacks German", id);
     }
     CHECK(!ui_text_defined("en", UI_TEXT_COUNT) && !*ui_text_in("ru", UI_TEXT_COUNT), "an id past the catalog gives text");
     // other languages fall back to English for the menu, and keep their own keyboard texts
@@ -916,6 +918,9 @@ static void probe_menu_text(void) {
     CHECK(strstr(ui_text_in("pt-BR", UI_MENU_OV_GAME_PCT), "%.0f%%") &&
           strstr(ui_text_in("pt-BR", UI_MENU_OV_MAX_MS), "%.1f") &&
           strstr(ui_text_in("pt-BR", UI_MENU_OV_LOW1), "%.0f") && strstr(ui_text_in("zh-Hans", UI_MENU_OV_LOW01), "%.0f"), "pt-BR overlay format lost its conversion");
+    CHECK(strstr(ui_text_in("de", UI_MENU_OV_GAME_PCT), "%.0f%%") && strstr(ui_text_in("de", UI_MENU_OV_MAX_MS), "%.1f") &&
+          strstr(ui_text_in("de", UI_MENU_OV_LOW1), "%.0f") && strstr(ui_text_in("de", UI_MENU_OV_LOW01), "%.0f"),
+          "de overlay format lost its conversion");
     // a Brazilian game language gets the Brazilian keyboard row, Portugal's Portuguese keeps its own
     CHECK(!strcmp(ui_text_lang("pt-BR"), "pt-BR") && !strcmp(ui_text_lang("pt"), "pt") &&
           strcmp(ui_text_in("pt-BR", UI_SWKBD_PROMPT), ui_text_in("pt", UI_SWKBD_PROMPT)), "pt-BR keyboard row not used");
@@ -928,6 +933,9 @@ static void probe_menu_text(void) {
     CHECK(menu_text(UI_MENU_CONTINUE) == ui_text_in("en", UI_MENU_CONTINUE), "menu_text did not follow MENU_LANG=en");
     cfg_set("TOTK_MENU_LANG", "zh-Hans");
     CHECK(menu_text(UI_MENU_TITLE) == ui_text_in("zh-Hans", UI_MENU_TITLE), "menu_text ignores MENU_LANG=zh-Hans");
+    cfg_set("TOTK_MENU_LANG", "de");
+    CHECK(menu_text(UI_MENU_TITLE) == ui_text_in("de", UI_MENU_TITLE) && !strcmp(menu_text(UI_MENU_TITLE), "Einstellungen"),
+          "menu_text ignores MENU_LANG=de");
     cfg_set("TOTK_MENU_LANG", "");
     // the system language as ui_text.c resolve_menu_lang takes it: the tag, else its base language (ru-RU: ru), else en
     const char *sys_lang = ui_text_lang(plat_ui_language());
