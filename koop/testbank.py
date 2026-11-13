@@ -1233,6 +1233,42 @@ def self_update(repo):
             shutil.copyfile(src, HERE / name)
 
 
+XLATE_TOOLS = ('.NET SDK 10', 'VS Build Tools (C++)')   # braucht nur, wer den Shader-Übersetzer selbst baut
+
+
+PREBUILT_XLATE = HERE / 'xlate'   # legt make_installer.py bei (3 MB; für das Repo zu groß, check_content)
+
+
+def prebuilt_xlate(repo, src=None):
+    """Das Setup bringt totk_xlate.exe fertig mit (eigener Code und Ryujinx, MIT, kein Spielinhalt). Kopiert ihn nach
+    build/xlate, wenn er dort fehlt oder seine Kennung (totk_xlate.id) sich geändert hat. True: Übersetzer liegt bereit."""
+    src, dst = Path(src or PREBUILT_XLATE), Path(repo) / 'build' / 'xlate'
+    if not (src / ('totk_xlate' + EXE)).is_file():
+        return (dst / ('totk_xlate' + EXE)).is_file()
+    sid, did = src / 'totk_xlate.id', dst / 'totk_xlate.id'
+    if not (dst / ('totk_xlate' + EXE)).is_file() or not did.is_file() or sid.read_bytes() != did.read_bytes():
+        dst.mkdir(parents=True, exist_ok=True)
+        for name in ('totk_xlate' + EXE, 'totk_xlate.id'):
+            shutil.copyfile(src / name, dst / name)
+    return True
+
+
+def slim(ctx, log):
+    """Nach dem Bauen: die entpackte Kopie des Basisspiels (build/extracted/v0/romfs, rund 16 GB) löschen. Das Spiel
+    liest nur die mit dem Update zusammengeführte Fassung (build/extracted/<version>); extract.py führt das Update aus
+    der Basisspiel-Datei selbst zusammen, und der Schritt „Spieldateien entpacken“ gilt mit der zusammengeführten
+    Fassung als erledigt. ExeFS und Manifest von v0 (wenige MB) bleiben."""
+    ext = ctx.repo / 'build' / 'extracted'
+    merged = ctx.extracted
+    if not ((merged / 'exefs' / 'main.npdm').is_file() and (merged / 'romfs').is_dir() and ctx.exe.is_file()):
+        return
+    for d in (ext / 'v0' / 'romfs', ext / 'update-staging'):
+        if d.is_dir():
+            gb = sum(f.stat().st_size for f in d.rglob('*') if f.is_file()) / 2**30
+            shutil.rmtree(d, ignore_errors=True)
+            log(f'-- {d.relative_to(ctx.repo)} gelöscht ({gb:.1f} GB frei geworden)', 'ok')
+
+
 def shortcut_ps(exe, updates):
     """PowerShell, das „TotK Koop“ auf den Desktop legt. Mit Update-Quelle startet die Verknüpfung testbank.py --play
     über uvw (uv ohne Konsolenfenster): erst Updates holen und bauen, dann das Spiel. Sonst direkt totk.exe."""
@@ -1275,10 +1311,12 @@ def update_job(ctx, new, say):
             if r.run([str(git_path() or 'git'), '-C', str(repo), 'checkout', '-q', '-f', '-B', KOOP_BRANCH, new]):
                 return False, 'Der neue Stand ließ sich nicht auschecken.'
             self_update(repo)
+        prebuilt_xlate(repo)
         ok, text = build_job(ctx, set(UPDATE_STEPS),
                              lambda k, st: st == 'run' and say(f'Update wird gebaut: {k} …'))(r)
         if ok:
             mark_built(ctx.exe, repo)
+            slim(ctx, r.log)
         return ok, text
     return job
 
@@ -1367,24 +1405,31 @@ def install_job(s, dry, say):
             return str(git_path() or 'git')
         # 1. Werkzeuge
         say('1/6 Werkzeuge installieren …')
-        for tool in TOOLS:
-            if tool.optional or not tool.install:
-                continue
-            ok, txt = tool.check()
-            if ok:
-                r.log(f'-- {tool.name}: vorhanden ({txt})', 'dim')
-                continue
-            r.log(f'-- {tool.name} wird installiert', 'head')
-            for cmd in tool.install():
-                r.run(cmd, dry=dry)
-            if not dry and not tool.check()[0]:
-                return False, f'{tool.name} konnte nicht installiert werden. Setup neu starten (der PATH ist dann frisch).'
+        src = update_source()
+
+        def install_tools(names=None, skip=()):
+            for tool in TOOLS:
+                if tool.optional or not tool.install or tool.name in skip or (names and tool.name not in names):
+                    continue
+                ok, txt = tool.check()
+                if ok:
+                    r.log(f'-- {tool.name}: vorhanden ({txt})', 'dim')
+                    continue
+                r.log(f'-- {tool.name} wird installiert', 'head')
+                for cmd in tool.install():
+                    r.run(cmd, dry=dry)
+                if not dry and not tool.check()[0]:
+                    return f'{tool.name} konnte nicht installiert werden. Setup neu starten (der PATH ist dann frisch).'
+            return None
+        # Liegt der fertige Shader-Übersetzer bei, entfallen .NET SDK und VS Build Tools (rund 8 GB)
+        err = install_tools(skip=XLATE_TOOLS if (PREBUILT_XLATE / ('totk_xlate' + EXE)).is_file() else ())
+        if err:
+            return False, err
         ok, txt = check_vulkan()
         if not ok and not dry:
             return False, 'Vulkan fehlt: bitte den Grafiktreiber aktualisieren und das Setup neu starten.'
         # 2. Quellcode holen und den Koop-Patch einspielen
         say('2/6 Quellcode holen …')
-        src = update_source()
         if src and not (repo / '.git').exists():
             # Koop-Zweig mit allen Fixes direkt holen; spätere Updates holt der Start über die Verknüpfung (--play)
             if repo.exists() and any(repo.iterdir()) and not dry:
@@ -1420,6 +1465,11 @@ def install_job(s, dry, say):
         # 4. Bauen
         say('4/6 Spiel bauen (20 bis 60 Minuten) …')
         ctx = Ctx(repo, s)
+        if not dry and not prebuilt_xlate(repo):
+            # älterer Koop-Stand ohne mitgelieferten Übersetzer: dann doch selbst bauen
+            err = install_tools(names=XLATE_TOOLS)
+            if err:
+                return False, err
         ok, text = build_job(ctx, {st.key for st in STEPS}, lambda k, st: say(f'4/6 Bauen: {k} ({st})'), dry=dry)(r)
         if not ok:
             return False, text
@@ -1430,6 +1480,7 @@ def install_job(s, dry, say):
         seed = HERE / 'koop-start'
         if not dry:
             mark_built(ctx.exe, repo)
+            slim(ctx, r.log)
             if src:
                 self_update(repo)
             if not (profile / 'save').is_dir() and (seed / 'account.uid').is_file():
@@ -1483,7 +1534,7 @@ def install_gui(dry=False):
     top.pack(fill='x')
     ttk.Label(top, text='TotK Koop installieren', style='Head.TLabel').grid(row=0, column=0, columnspan=3, sticky='w')
     ttk.Label(top, style='Sub.TLabel', wraplength=840, justify='left', text=(
-        'Wähle deine eigenen Spieldateien und einen Ordner mit etwa 60 GB freiem Platz. Dann „Installieren“. Alles '
+        'Wähle deine eigenen Spieldateien und einen Ordner mit etwa 40 GB freiem Platz (nach dem Bauen bleiben rund 22 GB). Dann „Installieren“. Alles '
         'Weitere läuft von selbst; beim ersten Mal 30 bis 90 Minuten. Manche Schritte fragen nach Administratorrechten.')
               ).grid(row=1, column=0, columnspan=3, sticky='w', pady=(4, 12))
     fields = [('base', 'Basisspiel (XCI/NSP)', 'file', [('Switch-Spiel', '*.nsp *.xci'), ('Alle Dateien', '*.*')]),
@@ -1518,7 +1569,7 @@ def install_gui(dry=False):
             if key == 'dest':
                 gb = free_gb(Path(p)) if p else None
                 infos[key].config(text=f'{gb:.0f} GB frei' if gb is not None else '',
-                                  style='Ok.TLabel' if gb and gb >= 60 else 'Bad.TLabel')
+                                  style='Ok.TLabel' if gb and gb >= 40 else 'Bad.TLabel')
             else:
                 ok, txt = file_info(p)
                 infos[key].config(text=txt, style='Ok.TLabel' if ok else 'Bad.TLabel' if ok is False else 'Sub.TLabel')
@@ -1545,8 +1596,8 @@ def install_gui(dry=False):
             return
         dest = Path(vals['dest'].get() or '.')
         gb = free_gb(dest)
-        if gb is not None and gb < 60 and not (dest / 'totk-pc-recomp' / '.git').exists() and not dry:
-            if not messagebox.askyesno('TotK Koop', f'Dort sind nur {gb:.0f} GB frei, gebraucht werden etwa 60 GB. Trotzdem?'):
+        if gb is not None and gb < 40 and not (dest / 'totk-pc-recomp' / '.git').exists() and not dry:
+            if not messagebox.askyesno('TotK Koop', f'Dort sind nur {gb:.0f} GB frei, gebraucht werden etwa 40 GB. Trotzdem?'):
                 return
         for k in ('base', 'update', 'keys'):
             s[k] = vals[k].get()

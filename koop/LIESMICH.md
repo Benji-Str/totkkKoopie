@@ -33,7 +33,7 @@ lädt ihn hoch. Einmalig vorher: `python publish_update.py --setup https://githu
 | Reiter | Was du tust |
 |---|---|
 | 1 · Werkzeuge | Auf **Alles Fehlende installieren** klicken. Installiert werden Git, uv, MSYS2 mit seinen Paketen, das .NET SDK 10 und die VS Build Tools, alles über winget. Manche Installer fragen nach Admin-Rechten. Danach **Neu prüfen**. |
-| 2 · Repo | Einen Ordner mit rund **60 GB** freiem Platz wählen, dann **Klonen** und **Koop-Patch anwenden**. Der Patch liegt schon im Ordner. |
+| 2 · Repo | Einen Ordner mit rund **40 GB** freiem Platz wählen, dann **Klonen** und **Koop-Patch anwenden**. Der Patch liegt schon im Ordner. |
 | 3 · Spieldateien | Basisspiel (XCI oder NSP), Update 1.4.3 (NSP) und `prod.keys` wählen, Version 1.4.3 lassen, dann **Speichern**. |
 | 4 · Bauen | **Alles bauen**. Beim ersten Mal dauert das etwa 20 bis 60 Minuten. Fertige Schritte werden später übersprungen. Am Ende laufen die Selbsttests; wichtig ist die Zeile `coop: probe passed`. |
 | 5 · Koop & Spielen | „Allein testen (loop)“ und „Testmodus“ wählen, dann **Spiel starten**. Erwartet: Der orange Marker sitzt auf dem gelben Kreuz in der Bildmitte. |
